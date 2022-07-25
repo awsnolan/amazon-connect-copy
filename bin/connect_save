@@ -5,7 +5,7 @@
 # Get a list of components of an Amazon Connect instance
 #
 
-VERSION=1.1
+VERSION=1.2
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -20,11 +20,13 @@ Usage: connect_save [-?fsev] [-p aws_profile] [-c contact_flow_prefix] [-G ignor
     -p profile              AWS Profile to use
     -c contact_flow_prefix  Prefix of Contact Flows and Modules to be copied (all others will be ignored) - Default is to copy all
     -G ignore_prefix        Ignore hours, queues, routing profiles, flows or modules with names prefixed with ignore_prefix
+    -C codepage             Override the auto-detected codepage (e.g., use '-C CP1252' for Gitbash ANSI if experiencing encoding issues)
     -?                      Help
 EOD
 )
 usage() { echo -e "$USAGE" >&2; exit 2; }
 version() { echo -e "$SCRIPT_VERSION"; exit; }
+dos2unix() { tr -d '\r'; }
 
 error() {
     if [ "$#" -ne 0 ]; then
@@ -61,7 +63,16 @@ EOD
     exit 1
 }
 
-hex_code() { printf '%s' "$1" | xxd -u -p -c1 | while read x; do printf "%%%s" "$x"; done }
+hex_cmd=
+if [ -x "$(command -v xxd)" ]; then
+  hex_cmd="xxd -u -p -c1"
+elif [ -x "$(command -v hexdump)" ]; then
+  hex_cmd="hexdump -v -e '/1 \"%02X\n\"'"
+elif [ -x "$(command -v od)" ]; then
+  hex_cmd="od -An -vtx1 | tr [:lower:] [:upper:] | for i in \$(cat); do echo \$i; done"
+fi
+test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
+hex_code() { printf '%s' "$1" | eval "$hex_cmd" | while read x; do printf "%%%s" "$x"; done }
 
 path_encode()  {
     old_lc_collate=$LC_COLLATE
@@ -77,6 +88,18 @@ path_encode()  {
     LC_COLLATE=$old_lc_collate
 }
 
+# AWS CLI needs to output JSON
+export AWS_DEFAULT_OUTPUT=json
+aws_cli_encoding=UTF-8
+
+aws_cli_out_filter() {
+    if [ -n "$codepage" -a "$codepage" != "$aws_cli_encoding" ]; then
+        iconv -f $codepage -t $aws_cli_encoding
+    else
+        cat
+    fi
+}
+
 aws_connect() {
     local cmd=""
     local ii
@@ -84,7 +107,7 @@ aws_connect() {
         [[ "$ii" == *" "* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
     done
     echo "aws connect$profile_flag$cmd" >> "$aws_cli_log"
-    eval "aws connect$profile_flag$cmd" 2> $TEMPERR
+    eval "aws connect$profile_flag$cmd | aws_cli_out_filter" 2> $TEMPERR
     local ret=$?
     if [ -s $TEMPERR ]; then
         cat $TEMPERR | tee -a "$aws_cli_log" >&2
@@ -107,7 +130,11 @@ ignore_improper_extended_ascii=
 ignore_prefix=
 jq_prefix_filter=
 jq_prefix_filter_text=
-while getopts "?fsevp:c:G:" arg; do
+# codepage=${LANG##*.}
+eval $(locale -k LC_CTYPE | grep charmap)
+codepage=${charmap:-$aws_cli_encoding}
+codepage=${codepage##*.}
+while getopts "?fsevp:c:G:C:" arg; do
     case "$arg" in
     f)  forced=on;;
     s)  skip_cf_errors=on;;
@@ -119,6 +146,7 @@ while getopts "?fsevp:c:G:" arg; do
         jq_prefix_filter=" | select(.Name | test(\"^($ignore_prefix)\") | not)"
         jq_prefix_filter_text=" excluding those with names prefixed with \"$ignore_prefix\""
         ;;
+    C)  codepage=$OPTARG;;
     *)  usage;;
     esac
 done
@@ -195,7 +223,8 @@ aws_connect list-instances --max-items $maxitems > $TEMPFILE || error $LINENO
 instance_id=$(cat $TEMPFILE |
 jq -r ".InstanceSummaryList[] | select(.InstanceAlias == \"$instance_alias\")" |
 tee "$instance_alias_dir/instance.json" |
-jq -r ".Id")
+jq -r ".Id" |
+dos2unix)
 echo "Instance ID: $instance_id"
 
 test -n "$instance_id" || error "Instance $instance_alias does not exist"
@@ -241,6 +270,7 @@ tee "$instance_alias_dir/hours.json" |
 echo -e "\n$(jq -s "length") hours of operations listed in \"$instance_alias_dir/hours.json\"$jq_prefix_filter_text"
 
 jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hours.json" |
+dos2unix |
 while read hour_id hour_name; do
     echo "Exporting hours of operation $hour_name"
     hour_name_encoded=$(path_encode "$hour_name")
@@ -269,6 +299,7 @@ tee "$instance_alias_dir/queues.json" |
 echo -e "\n$(jq -s "length") queues listed in \"$instance_alias_dir/queues.json\"$jq_prefix_filter_text"
 
 jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" |
+dos2unix |
 while read queue_id queue_name; do
     echo "Exporting queue $queue_name"
     queue_name_encoded=$(path_encode "$queue_name")
@@ -297,6 +328,7 @@ tee "$instance_alias_dir/routings.json" |
 echo -e "\n$(jq -s "length") routing profiles listed in \"$instance_alias_dir/routings.json\"$jq_prefix_filter_text"
 
 jq -r ".Id + \" \" + .Name" "$instance_alias_dir/routings.json" |
+dos2unix |
 while read routing_id routing_name; do
     echo "Exporting routing profile $routing_name"
     routing_name_encoded=$(path_encode "$routing_name")
@@ -337,6 +369,7 @@ echo -e "\n$(jq -s "length") contact flow modules listed in \"$instance_alias_di
 
 cat "$instance_alias_dir/modules.json" > $TEMPFILE
 jq -r ".Id + \" \" + .Name" $TEMPFILE |
+dos2unix |
 while read module_id module_name; do
     echo "Exporting contact flow module $module_name"
     module_name_encoded=$(path_encode "$module_name")
@@ -347,7 +380,7 @@ while read module_id module_name; do
     if [ -s $TEMPCF ]; then
         # Status == "saved" is considered a failure,
         # not to copy an unpublished contact flow module
-        cf_status=$(jq -r ".ContactFlowModule.Status" $TEMPCF)
+        cf_status=$(jq -r ".ContactFlowModule.Status" $TEMPCF | dos2unix)
         if [ "$cf_status" != "published" ]; then
             echo
             echo "$module_name: Contact flow module not published"
@@ -357,7 +390,6 @@ while read module_id module_name; do
         if [ -s $TEMPCF ]; then
             cat $TEMPCF |
             jq -r '.ContactFlowModule.Content' > "$instance_alias_dir/module_$module_name_encoded.json"
-            # fix_module_json "$instance_alias_dir/module_$module_name_encoded.json"
         fi
     fi
 done
@@ -388,6 +420,7 @@ echo -e "\n$(jq -s "length") contact flows listed in \"$instance_alias_dir/flows
 
 cat "$instance_alias_dir/flows.json" > $TEMPFILE
 jq -r ".Id + \" \" + .Name" $TEMPFILE |
+dos2unix |
 while read flow_id flow_name; do
     echo "Exporting contact flow $flow_name"
     aws_connect describe-contact-flow \
