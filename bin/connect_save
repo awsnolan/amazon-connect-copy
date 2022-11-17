@@ -338,8 +338,7 @@ while read routing_id routing_name; do
     aws_connect describe-routing-profile \
         --instance-id $instance_id \
         --routing-profile-id $routing_id |
-        jq -r "del(.RoutingProfile.
-        OfAssociatedQueues, .RoutingProfile.NumberOfAssociatedUsers)" \
+        jq -r "del(.RoutingProfile.NumberOfAssociatedQueues, .RoutingProfile.NumberOfAssociatedUsers)" \
         > "$instance_alias_dir/routing_$routing_name_encoded.json" || error $LINENO
     aws_connect list-routing-profile-queues \
         --instance-id $instance_id \
