@@ -7,7 +7,7 @@
 #   connect_save on instance A and B.
 #
 
-VERSION=1.2.2
+VERSION=1.3
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -139,6 +139,7 @@ fi
 
 routing_profile_to_ignore="Basic Routing Profile"
 flow_template=$helper/flow_template.json
+module_template=$helper/module_template.json
 
 cat <<EOD
 Instance Alias A: $instance_alias_a (in directory "$instance_alias_dir_a")
@@ -398,8 +399,8 @@ cat > $flow_template <<EOD
         "ActionMetadata": {
             "e093fb75-2263-4594-875e-2d8e9974595f": {
                 "position": {
-                    "x": 223,
-                    "y": 76
+                    "x": 120,
+                    "y": 20
                 }
             }
         }
@@ -412,6 +413,40 @@ cat > $flow_template <<EOD
             "Transitions": {}
         }
     ]
+}
+EOD
+
+cat > $module_template <<EOD
+{
+  "Version": "2019-10-30",
+  "StartAction": "13f850a8-4882-4b78-ac83-508273b6a3d6",
+  "Metadata": {
+    "entryPointPosition": {
+      "x": 20,
+      "y": 20
+    },
+    "ActionMetadata": {
+      "13f850a8-4882-4b78-ac83-508273b6a3d6": {
+        "position": {
+          "x": 120,
+          "y": 20
+        }
+      }
+    }
+  },
+  "Actions": [
+    {
+      "Parameters": {},
+      "Identifier": "13f850a8-4882-4b78-ac83-508273b6a3d6",
+      "Type": "EndFlowModuleExecution",
+      "Transitions": {}
+    }
+  ],
+  "Settings": {
+    "InputParameters": [],
+    "OutputParameters": [],
+    "Transitions": []
+  }
 }
 EOD
 
