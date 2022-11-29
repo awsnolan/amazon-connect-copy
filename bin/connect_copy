@@ -5,7 +5,7 @@
 # Copy Amazon Connect instance A to instance B safely
 #
 
-VERSION=1.2.2
+VERSION=1.3
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -134,12 +134,13 @@ TEMPFILE=$(mktemp)
 TEMPERR=${TEMPFILE}_err
 TEMPNEW=${TEMPFILE}_new
 TEMPOLD=${TEMPFILE}_old
+TEMPMOD=${TEMPFILE}_mod
 TEMPA=${TEMPFILE}_A
 TEMPB=${TEMPFILE}_B
 TEMP1=${TEMPFILE}_1
 TEMP2=${TEMPFILE}_2
 trap 'rm -r -- $TEMPFILE $TEMPERR $TEMPNEW $TEMPOLD $TEMPA $TEMPB $TEMP1 $TEMP2' EXIT
-touch $TEMPFILE $TEMPERR $TEMPNEW $TEMPOLD $TEMPA $TEMPB $TEMP1 $TEMP2
+touch $TEMPFILE $TEMPERR $TEMPNEW $TEMPOLD $TEMPMOD $TEMPA $TEMPB $TEMP1 $TEMP2
 
 actionLead="# Action -"
 dryrun=
@@ -526,31 +527,35 @@ gen_helper_routing_new() {
     routing_name=$1
     out_file="$helper/routingNew_$routing_name.json"
     rpqr_file=$(gen_helper_rpqr "$routing_name")
+    qconfs=
+    if [ -s $rpqr_file ]; then
+        qconfs=", QueueConfigs: \$rpqc"
+    fi
     cat "$instance_alias_dir_a/routing_$routing_name.json" |
     jq --arg iid $instance_id_b \
         --slurpfile rpqc "$rpqr_file" \
         ".RoutingProfile |
         del(.RoutingProfileId, .RoutingProfileArn) |
-        . + { InstanceId: \$iid, QueueConfigs: \$rpqc } |
+        . + { InstanceId: \$iid$qconfs } |
         del(.MediaConcurrencies[] | select(.Concurrency == 0))" |
     sed -f "$helper_sed" > "$out_file"
     rm "$rpqr_file"
     echo "$out_file"
 }
 
-gen_helper_routing_old() {
-    routing_name=$1
-    out_file="$helper/routingOld_$routing_name.json"
-    rpqr_file=$(gen_helper_rpqr "$routing_name")
-    cat "$instance_alias_dir_b/routing_$routing_name.json" |
-    jq --arg iid $instance_id_b \
-        --slurpfile rpqc "$rpqr_file" \
-        ".RoutingProfile |
-        { InstanceId, RoutingProfileId, QueueConfigs: \$rpqc }" |
-    sed -f "$helper_sed" > "$out_file"
-    rm "$rpqr_file"
-    echo "$out_file"
-}
+# gen_helper_routing_old() {
+#     routing_name=$1
+#     out_file="$helper/routingOld_$routing_name.json"
+#     rpqr_file=$(gen_helper_rpqr "$routing_name")
+#     cat "$instance_alias_dir_b/routing_$routing_name.json" |
+#     jq --arg iid $instance_id_b \
+#         --slurpfile rpqc "$rpqr_file" \
+#         ".RoutingProfile |
+#         { InstanceId, RoutingProfileId, QueueConfigs: \$rpqc }" |
+#     sed -f "$helper_sed" > "$out_file"
+#     rm "$rpqr_file"
+#     echo "$out_file"
+# }
 
 cat <<EOD
 
@@ -796,7 +801,12 @@ fi
 
 ############################################################
 #
-# Contact Flow Modules
+# Contact Flow Modules Creation
+# TODO:
+#   - Use $helper/module_template.json as a template to create new contact flows
+#
+# Note: Must create all flow modules and flows from an empty template first
+# such that references can be resolved in updates
 #
 
 cat <<EOD
@@ -806,7 +816,8 @@ Contact Flow Modules Creation
 EOD
 
 # Preload as $helper_old may change
-egrep "^module_$contact_flow_prefix_encoded" "$helper_old" > $TEMPOLD
+# Use TEMPMOD instead of TEMPOLD to carry over to module update
+egrep "^module_$contact_flow_prefix_encoded" "$helper_old" > $TEMPMOD
 # Create what is in $helper_new
 egrep "^module_$contact_flow_prefix_encoded" "$helper_new" > $TEMPNEW
 if [ ! -s $TEMPNEW ]; then
@@ -828,12 +839,12 @@ else
         out_file="$helper/output_$module_json"
 
         # Contact Flow Module template file
-        # module_template_file=$helper/module_template.json
+        module_template_file=$helper/module_template.json
 
-        cat "$instance_alias_dir_a/$module_json" |
-        sed -f "$helper_sed" |
-        sub_lex_bot \
-        > "$helper/$module_json"
+        # cat "$instance_alias_dir_a/$module_json" |
+        # sed -f "$helper_sed" |
+        # sub_lex_bot \
+        # > "$helper/$module_json"
 
         cat <<EOD >> "$helper_log"
 
@@ -850,7 +861,7 @@ EOD
 aws connect create-contact-flow-module \
 --instance-id $instance_id_b \
 --name "${module_name_decoded//\"/\\\"}" \
---content "file://$helper/$module_json" \
+--content "file://$module_template_file" \
 > "$out_file"
 EOD
             # rm "$helper/$module_json"
@@ -860,12 +871,12 @@ EOD
         aws_connect create-contact-flow-module \
             --instance-id $instance_id_b \
             --name "${module_name_decoded//\"/\\\"}" \
-            --content "file://$helper/$module_json" \
+            --content "file://$module_template_file" \
             > "$out_file" || error $LINENO
         module_id_b=$(jq -r ".Id" "$out_file" | dos2unix)
 
-        # All flows will be updated with content
-        # echo "$module_json" >> $TEMPOLD
+        # All flow modules will be updated with content
+        echo "$module_json" >> $TEMPMOD
 
         aws_connect describe-contact-flow-module \
             --instance-id $instance_id_b \
@@ -898,81 +909,9 @@ EOD
 fi
 
 
-cat <<EOD
-
-Contact Flow Modules Update
----------------------------
-EOD
-
-if [ ! -s $TEMPOLD ]; then
-    echo "No contact flow modules to update"
-else
-    num_modules=$(echo $(cat $TEMPOLD | wc -l))
-    echo -e "\nChecking $num_modules contact flow modules$contact_flow_prefix_text for an update"
-    ii=0
-    sort $TEMPOLD |
-    while read module_json; do
-        ii=$[ii+1]
-        echo -n "$ii. $module_json ... "
-        module_name=${module_json#module_}
-        module_name=${module_name%.json}
-        module_name_decoded=$(path_decode "$module_name")
-
-        # module_id_b=$(jq -r "select(.Name == \"${module_name_decoded//\"/\\\"}\") | .Id" "$instance_alias_dir_b/modules.json")
-        module_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/modules.json" | jq -r "select(.Name == \"${module_name_decoded//\"/%22}\") | .Id" | dos2unix)
-
-        cat "$instance_alias_dir_a/$module_json" > $TEMPA
-        cat "$instance_alias_dir_b/$module_json" > $TEMPB
-        df=$(diff_files); echo $df; test "$df" == "same" && continue
-
-        cat "$instance_alias_dir_a/$module_json" |
-        sed -f "$helper_sed" |
-        sub_lex_bot \
-        > "$helper/$module_json"
-
-        cat <<EOD >> "$helper_log"
-
-$actionLead Update contact flow module: $module_name_decoded
-EOD
-        if [ -n "$dryrun" ]; then
-            cat <<EOD
-Dry-update contact flow module
---instance-id $instance_id_b
---contact-flow-module-id $module_id_b
-
-EOD
-            cat <<EOD >> "$helper_log"
-aws connect update-contact-flow-module-content \
---instance-id $instance_id_b \
---contact-flow-module-id $module_id_b \
---content "file://$helper/$module_json" \
-> "$helper/output_content_$module_json"
-EOD
-            # rm "$helper/$module_json"
-            continue
-        fi
-
-        aws_connect update-contact-flow-module-content \
-            --instance-id $instance_id_b \
-            --contact-flow-module-id $module_id_b \
-            --content "file://$helper/$module_json" \
-            > "$helper/output_content_$module_json" || error $LINENO
-
-        aws_connect describe-contact-flow-module \
-            --instance-id $instance_id_b \
-            --contact-flow-module-id $module_id_b \
-            > $TEMPFILE || error $LINENO
-        cat $TEMPFILE |
-        jq -r '.ContactFlowModule.Content' > "$instance_alias_dir_b/$module_json"
-    done
-    test $? -eq 0 || error
-fi
-
-
-
 ############################################################
 #
-# Contact Flows
+# Contact Flows Creation
 #
 # TODO:
 #   - Use $helper/flow_template.json as a template to create new contact flows
@@ -1093,6 +1032,87 @@ EOD
     fi
 fi
 
+
+############################################################
+#
+# Contact Flow Modules Update
+#
+
+cat <<EOD
+
+Contact Flow Modules Update
+---------------------------
+EOD
+
+if [ ! -s $TEMPMOD ]; then
+    echo "No contact flow modules to update"
+else
+    num_modules=$(echo $(cat $TEMPMOD | wc -l))
+    echo -e "\nChecking $num_modules contact flow modules$contact_flow_prefix_text for an update"
+    ii=0
+    sort $TEMPMOD |
+    while read module_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $module_json ... "
+        module_name=${module_json#module_}
+        module_name=${module_name%.json}
+        module_name_decoded=$(path_decode "$module_name")
+
+        # module_id_b=$(jq -r "select(.Name == \"${module_name_decoded//\"/\\\"}\") | .Id" "$instance_alias_dir_b/modules.json")
+        module_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/modules.json" | jq -r "select(.Name == \"${module_name_decoded//\"/%22}\") | .Id" | dos2unix)
+
+        cat "$instance_alias_dir_a/$module_json" > $TEMPA
+        cat "$instance_alias_dir_b/$module_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+
+        cat "$instance_alias_dir_a/$module_json" |
+        sed -f "$helper_sed" |
+        sub_lex_bot \
+        > "$helper/$module_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update contact flow module: $module_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update contact flow module
+--instance-id $instance_id_b
+--contact-flow-module-id $module_id_b
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-contact-flow-module-content \
+--instance-id $instance_id_b \
+--contact-flow-module-id $module_id_b \
+--content "file://$helper/$module_json" \
+> "$helper/output_content_$module_json"
+EOD
+            # rm "$helper/$module_json"
+            continue
+        fi
+
+        aws_connect update-contact-flow-module-content \
+            --instance-id $instance_id_b \
+            --contact-flow-module-id $module_id_b \
+            --content "file://$helper/$module_json" \
+            > "$helper/output_content_$module_json" || error $LINENO
+
+        aws_connect describe-contact-flow-module \
+            --instance-id $instance_id_b \
+            --contact-flow-module-id $module_id_b \
+            > $TEMPFILE || error $LINENO
+        cat $TEMPFILE |
+        jq -r '.ContactFlowModule.Content' > "$instance_alias_dir_b/$module_json"
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Contact Flows Update
+#
 
 cat <<EOD
 

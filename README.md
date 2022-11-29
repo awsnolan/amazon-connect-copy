@@ -1,6 +1,6 @@
 # Amazon-Connect-Copy User Guide
 
-The Amazon-Connect-Copy script (v1.2.2) copies components from the source Amazon Connect instance
+The Amazon-Connect-Copy script (v1.3) copies components from the source Amazon Connect instance
 to the target instance safely, fixing all internal references.
 
 You may use Amazon-Connect-Copy to deploy an Amazon Connect instance across environments
@@ -223,7 +223,7 @@ Example:
 
 ## Useful Tips
 
-- This script has been tested with AWS CLI 2.4.1, which supports the latest
+- This script has been tested with AWS CLI 2.8.6, which supports the latest
   Amazon Connect features, including Contact Flow Modules.
   (Even your instances may not be using all latest Amazon Connect features,
   the script will check them and therefore require the latest AWS CLI.)
