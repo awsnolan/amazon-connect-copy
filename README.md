@@ -223,7 +223,7 @@ Example:
 
 ## Useful Tips
 
-- This script has been tested with AWS CLI 2.4.1, which supports the latest
+- This script has been tested with AWS CLI 2.8.6, which supports the latest
   Amazon Connect features, including Contact Flow Modules.
   (Even your instances may not be using all latest Amazon Connect features,
   the script will check them and therefore require the latest AWS CLI.)
