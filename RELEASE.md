@@ -1,5 +1,10 @@
 # Release Notes
 
+- Version 1.3.1
+  - Fix unpublished contact flow error
+  - Limit queue copying to STANDARD type only
+  - Update doc
+
 - Version 1.3
   - Fix an error when a routing profile has no queues
   - Fix reference cross-reference between contact flows and modules

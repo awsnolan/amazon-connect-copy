@@ -5,7 +5,7 @@
 # Copy Amazon Connect instance A to instance B safely
 #
 
-VERSION=1.3
+VERSION=1.3.1
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -482,6 +482,7 @@ EOD
         # Update instance B queues
         aws_connect list-queues \
             --instance-id $instance_id_b \
+            --queue-types "STANDARD" \
             > $TEMPFILE || error $LINENO
         cat $TEMPFILE |
         jq -r ".QueueSummaryList[] | select(.QueueType != \"AGENT\")" > "$instance_alias_dir_b/queues.json"
