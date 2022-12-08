@@ -16,7 +16,7 @@ their corresponding components in the new instance, including:
 - Lex bots (Classic) (pre-deployed)
 - Prompts (pre-uploaded)
 - Hours of operations
-- Queues
+- Queues (STANDARD type only)
 - Routing profiles
 - Contact flow modules
 - Contact flows
@@ -30,8 +30,9 @@ other contact centres that may happen to be using the same target instance):
   - Inbound Contact flow/IVR mappings
   - Outbound caller ID number for queues
 - Quick connects
-- Settings for existing queues
-  - Note: Settings for new queues will still be copied
+- Agent queues
+- Settings for existing standard queues
+  - Note: Settings for new standard queues will still be copied
 - Historical metrics and reports
 - Contact Trace Records (CTRs)
 - Custom vocabularies

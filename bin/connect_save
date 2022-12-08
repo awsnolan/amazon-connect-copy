@@ -391,8 +391,7 @@ while read module_id module_name; do
             echo "$module_name: Contact flow module not published"
             # Let error decide if continue or not
             error $LINENO "$module_name" "$instance_alias_dir/modules.json"
-        fi
-        if [ -s $TEMPCF ]; then
+        else
             cat $TEMPCF |
             jq -r '.ContactFlowModule.Content' > "$instance_alias_dir/module_$module_name_encoded.json"
         fi
@@ -431,11 +430,18 @@ while read flow_id flow_name; do
     aws_connect describe-contact-flow \
         --instance-id $instance_id \
         --contact-flow-id $flow_id > $TEMPCF \
-        || error $LINENO "$flow_name" "$instance_alias_dir/flows.json"
+        2> /dev/null
+    #     || error $LINENO "$flow_name" "$instance_alias_dir/flows.json"
+    # AWS CLI seems not returning error for unpublished
+    # Need to check for an empty $TEMPCF
     flow_name_encoded=$(path_encode "$flow_name")
     if [ -s $TEMPCF ]; then
         cat $TEMPCF |
         jq -r '.ContactFlow.Content' > "$instance_alias_dir/flow_$flow_name_encoded.json"
+    else
+        echo
+        echo "$flow_name: Contact flow not published"
+        error $LINENO "$flow_name" "$instance_alias_dir/flows.json"
     fi
 done
 test $? -eq 0 || error
