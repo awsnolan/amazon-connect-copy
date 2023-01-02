@@ -5,7 +5,7 @@
 # Copy Amazon Connect instance A to instance B safely
 #
 
-VERSION=1.3.1
+VERSION=1.3.2
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -698,7 +698,7 @@ else
 
             cat "$instance_alias_dir_b/$routing_json" |
             jq -r ".RoutingProfile.MediaConcurrencies[] | select(.Concurrency != 0)" |
-            jq -s > "$helper/routingConcurrency_$routing_name.json"
+            jq -s "." > "$helper/routingConcurrency_$routing_name.json"
 
             cat <<EOD >> "$helper_log"
 
@@ -757,9 +757,9 @@ EOD
                     # cat "$instance_alias_dir_a/routingQs_$routing_name.json" |
                     #     jq -r ".RoutingProfileQueueConfigSummaryList[] | select(.QueueName == \"${q_name//\"/\\\"}\") | { QueueReference: { QueueId, Channel }, Priority, Delay }" >> $TEMP1
                     sed -e's/\\"/%22/g' "$instance_alias_dir_a/routingQs_$routing_name.json" |
-                        jq -r ".RoutingProfileQueueConfigSummaryList[] | select(.QueueName == \"${q_name//\"/%22}}\") | { QueueReference: { QueueId, Channel }, Priority, Delay }" >> $TEMP1
+                        jq -r ".RoutingProfileQueueConfigSummaryList[] | select(.QueueName == \"${q_name//\"/%22}\") | { QueueReference: { QueueId, Channel }, Priority, Delay }" >> $TEMP1
                 done
-                cat $TEMP1 | sed -f "$helper_sed" | jq -s > "$helper/routingQueueConfig_$routing_name.json"
+                cat $TEMP1 | sed -f "$helper_sed" | jq -s "." > "$helper/routingQueueConfig_$routing_name.json"
 
                 cat <<EOD >> "$helper_log"
 

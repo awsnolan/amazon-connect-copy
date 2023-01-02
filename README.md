@@ -1,6 +1,6 @@
 # Amazon-Connect-Copy User Guide
 
-The Amazon-Connect-Copy script (v1.3.1) copies components from the source Amazon Connect instance
+The Amazon-Connect-Copy script (v1.3.2) copies components from the source Amazon Connect instance
 to the target instance safely, fixing all internal references.
 
 You may use Amazon-Connect-Copy to deploy an Amazon Connect instance across environments
@@ -53,6 +53,7 @@ A note to developers: To contribute, please read [CONTRIBUTING.md](./CONTRIBUTIN
 - Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
   - Recommend installing the latest version of AWS CLI.
 - Install [jq](https://stedolan.github.io/jq/) (if not already installed on your platform).
+  - Require `jq` version 1.6 or higher.
 - Copy `bin/*` to your Shell search path (e.g., `cp bin/* /usr/local/bin/`).
 
 ## Example
