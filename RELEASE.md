@@ -1,5 +1,10 @@
 # Release Notes
 
+- Version 1.3.2
+  - Fix QueueName select in RoutingProfileQueueConfigSummaryList
+  - Remove routing_profile_to_ignore from connect_diff
+  - Explicit with `.` in `jq -s '.'` (instead of just `jq -s`) in connect_copy
+
 - Version 1.3.1
   - Fix unpublished contact flow error
   - Limit queue copying to STANDARD type only
