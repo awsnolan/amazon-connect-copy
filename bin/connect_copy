@@ -8,6 +8,8 @@
 VERSION=1.3.2
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
+AWS_CLI_MAX_QUEUE_CONFIGS=10
+
 USAGE=$(cat <<EOD
 Usage: $(basename $0) [-?dev] helper
     Copy Amazon Connect instance A to instance B safely, based on the
@@ -752,6 +754,7 @@ EOD
             > $TEMP1
             diff $TEMPA $TEMPB | grep "^< " | sed -e"s/^< //" > $TEMP2
             if [ -s $TEMP2 ]; then
+                helper_rqc_json="$helper/routingQueueConfig_$routing_name.json"
                 cat $TEMP2 |
                 while read q_name; do
                     # cat "$instance_alias_dir_a/routingQs_$routing_name.json" |
@@ -759,12 +762,14 @@ EOD
                     sed -e's/\\"/%22/g' "$instance_alias_dir_a/routingQs_$routing_name.json" |
                         jq -r ".RoutingProfileQueueConfigSummaryList[] | select(.QueueName == \"${q_name//\"/%22}\") | { QueueReference: { QueueId, Channel }, Priority, Delay }" >> $TEMP1
                 done
-                cat $TEMP1 | sed -f "$helper_sed" | jq -s "." > "$helper/routingQueueConfig_$routing_name.json"
+
+                cat $TEMP1 | sed -f "$helper_sed" | jq -s "." > "$helper_rqc_json"
 
                 cat <<EOD >> "$helper_log"
 
 $actionLead Associate queues to routing profile: $routing_name_decoded
 EOD
+                num_queue_configs=$(cat "$helper_rqc_json" | jq "length")
                 if [ -n "$dryrun" ]; then
                     cat <<EOD
 Dry-associate queues to routing profile $routing_name_decoded
@@ -772,19 +777,33 @@ $(cat $TEMP2)
 
 EOD
 # $(cat $TEMPFILE)
-                   cat <<EOD >> "$helper_log"
+                    if [ "$num_queue_configs" -ge "$AWS_CLI_MAX_QUEUE_CONFIGS" ]; then
+                        echo "# The $num_queue_configs queue configs will be split into lots of $AWS_CLI_MAX_QUEUE_CONFIGS in dry-run mode." >> "$helper_log"
+                    fi
+                    cat <<EOD >> "$helper_log"
 aws connect associate-routing-profile-queues \
 --instance-id $instance_id_b \
 --routing-profile-id $routing_id_b \
---queue-configs "file://$helper/routingQueueConfig_$routing_name.json"
+--queue-configs "file://$helper_rqc_json"
 EOD
-                    # rm "$helper/routingQueueConfig_$routing_name.json"
+                    # rm "$helper_rqc_json"
                 else
-                    cat $TEMP2
-                    aws_connect associate-routing-profile-queues \
-                        --instance-id $instance_id_b \
-                        --routing-profile-id $routing_id_b \
-                        --queue-configs "file://$helper/routingQueueConfig_$routing_name.json" || error $LINENO
+                    # cat $TEMP2
+                    # aws_connect associate-routing-profile-queues \
+                    #     --instance-id $instance_id_b \
+                    #     --routing-profile-id $routing_id_b \
+                    #     --queue-configs "file://$helper_rqc_json" || error $LINENO
+                    # echo $num_queue_configs Queue Configs
+                    iii=0
+                    while [ "$iii" -lt "$num_queue_configs" ]; do
+                        jjj=$[iii+AWS_CLI_MAX_QUEUE_CONFIGS]
+                        arg_queue_configs="'$(cat "$helper_rqc_json" | jq ".[$iii:$jjj]")'"
+                        aws_connect associate-routing-profile-queues \
+                            --instance-id $instance_id_b \
+                            --routing-profile-id $routing_id_b \
+                            --queue-configs $arg_queue_configs || error $LINENO
+                        iii=$jjj
+                    done
                 fi
             fi
 
