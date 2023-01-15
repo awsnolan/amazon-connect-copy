@@ -538,7 +538,7 @@ gen_helper_routing_new() {
     jq --arg iid $instance_id_b \
         --slurpfile rpqc "$rpqr_file" \
         ".RoutingProfile |
-        del(.RoutingProfileId, .RoutingProfileArn) |
+        del(.RoutingProfileId, .RoutingProfileArn, .QueueConfigs) |
         . + { InstanceId: \$iid$qconfs } |
         del(.MediaConcurrencies[] | select(.Concurrency == 0))" |
     sed -f "$helper_sed" > "$out_file"
