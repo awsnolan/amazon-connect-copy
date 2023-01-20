@@ -1,5 +1,9 @@
 # Release Notes
 
+- Version 1.3.3
+  - Add `check_contact_flow()` to find broken references (missing components) in contact flows
+  - Fix QueueConfigs limit issue when creating new routing profiles
+
 - Version 1.3.2
   - Fix AWS CLI max 10 queue-configs in `aws connect associate-routing-profile-queues`
   - Fix QueueName select in RoutingProfileQueueConfigSummaryList
