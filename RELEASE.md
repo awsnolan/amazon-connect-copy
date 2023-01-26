@@ -1,5 +1,9 @@
 # Release Notes
 
+- Version 1.3.4
+  - Copy contact flow/module description
+  - Amend README.md
+
 - Version 1.3.3
   - Add `check_contact_flow()` to find broken references (missing components) in contact flows
   - Fix QueueConfigs limit issue when creating new routing profiles
