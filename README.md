@@ -1,6 +1,6 @@
 # Amazon-Connect-Copy User Guide
 
-The Amazon-Connect-Copy script (v1.3.3) copies components from the source Amazon Connect instance
+The Amazon-Connect-Copy script (v1.3.4) copies components from the source Amazon Connect instance
 to the target instance safely, fixing all internal references.
 
 You may use Amazon-Connect-Copy to deploy an Amazon Connect instance across environments
@@ -95,7 +95,7 @@ Note: All names in Amazon Connect are case sensitive.
 - Upload all required prompts to the target instance.
   - The prompt names need to be *exactly* the same as their counterparts
     in the source instance.
-- For an incremental instance update with contact flow or module name changes,
+- For an incremental instance update with contact flow or module **name changes**,
   before the copying please manually change the corresponding flow or module names in
   the *target* instance. Otherwise, contact flows and modules with new names will
   be created in the target instance, and those with old names will be left untouched.
@@ -225,7 +225,11 @@ Example:
 
 ## Useful Tips
 
-- This script has been tested with AWS CLI 2.8.6, which supports the latest
+- DO NOT reuse the *target* instance directory and the *helper* directory.
+  Remove these two directories after copying.
+  - If you want to keep a backup of the target instance after copying,
+    run `connect_save` again on the target instance.
+- This script has been tested with AWS CLI 2.9.4, which supports the latest
   Amazon Connect features, including Contact Flow Modules.
   (Even your instances may not be using all latest Amazon Connect features,
   the script will check them and therefore require the latest AWS CLI.)
@@ -236,10 +240,6 @@ Example:
 - `connect_copy` will change files in the helper directory, and when in
   non-dry-run mode, will change the target instance directory as well.
   i.e., `connect_copy` is not idempotent to the target and helper directory.
-- DO NOT reuse the target instance directory and the helper directory.
-  Remove these two directories after copying.
-  - If you want to keep a backup of the target instance after copying,
-    run `connect_save` again on the target instance.
 - `connect_diff` and `connect_copy` do not change the source instance directory,
   so the source can serve as a backup or be used to copy to multiple target instances.
 - If relative paths are specified in instance aliases, make sure you are running

@@ -5,7 +5,7 @@
 # Get a list of components of an Amazon Connect instance
 #
 
-VERSION=1.3.3
+VERSION=1.3.4
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -100,6 +100,20 @@ aws_cli_out_filter() {
     else
         cat
     fi
+}
+
+add_json_attribute() {
+    attr_name=$1
+    attr_value=$2
+    key_id=$3
+    manifest=$4
+    #echo "Adding $attr_name=\"$attr_value\" to $key_id in $manifest"
+    # TEMPCF reused and needs to be emptied afterwards
+    cat $manifest |
+    jq -rs "map(if .Id == \"$key_id\" then . + {$attr_name: \"$attr_value\"} else . end) | .[]" > $TEMPCF
+    cat $TEMPCF > $manifest
+    > $TEMPCF
+    # jq -r "map(.Id |= if .Id == \"$key_id\" then . else . end)"
 }
 
 aws_connect() {
@@ -385,15 +399,17 @@ while read module_id module_name; do
     if [ -s $TEMPCF ]; then
         # Status == "saved" is considered a failure,
         # not to copy an unpublished contact flow module
-        cf_status=$(jq -r ".ContactFlowModule.Status" $TEMPCF | dos2unix)
-        if [ "$cf_status" != "published" ]; then
+        cfm_status=$(jq -r ".ContactFlowModule.Status" $TEMPCF | dos2unix)
+        if [ "$cfm_status" == "published" ]; then
+            cat $TEMPCF |
+            jq -r '.ContactFlowModule.Content' > "$instance_alias_dir/module_$module_name_encoded.json"
+            cfm_description=$(cat $TEMPCF | jq -r '.ContactFlowModule.Description')
+            add_json_attribute Description "$cfm_description" $module_id "$instance_alias_dir/modules.json"
+        else
             echo
             echo "$module_name: Contact flow module not published"
             # Let error decide if continue or not
             error $LINENO "$module_name" "$instance_alias_dir/modules.json"
-        else
-            cat $TEMPCF |
-            jq -r '.ContactFlowModule.Content' > "$instance_alias_dir/module_$module_name_encoded.json"
         fi
     fi
 done
@@ -438,6 +454,8 @@ while read flow_id flow_name; do
     if [ -s $TEMPCF ]; then
         cat $TEMPCF |
         jq -r '.ContactFlow.Content' > "$instance_alias_dir/flow_$flow_name_encoded.json"
+        cf_description=$(cat $TEMPCF | jq -r '.ContactFlow.Description')
+        add_json_attribute Description "$cf_description" $flow_id "$instance_alias_dir/flows.json"
     else
         echo
         echo "$flow_name: Contact flow not published"
