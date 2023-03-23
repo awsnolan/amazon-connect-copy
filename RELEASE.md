@@ -1,5 +1,8 @@
 # Release Notes
 
+- Version 1.3.5
+  - Handle null component descriptions by setting the corresponding target description to the component name
+
 - Version 1.3.4
   - Copy contact flow/module description
   - Amend README.md
