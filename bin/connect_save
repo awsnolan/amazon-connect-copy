@@ -5,7 +5,7 @@
 # Get a list of components of an Amazon Connect instance
 #
 
-VERSION=1.3.4
+VERSION=1.3.5
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -110,7 +110,7 @@ add_json_attribute() {
     #echo "Adding $attr_name=\"$attr_value\" to $key_id in $manifest"
     # TEMPCF reused and needs to be emptied afterwards
     cat $manifest |
-    jq -rs "map(if .Id == \"$key_id\" then . + {$attr_name: \"$attr_value\"} else . end) | .[]" > $TEMPCF
+    jq -rs "map(if .Id == \"$key_id\" then . + {$attr_name: \"${attr_value//\"/\\\"}\"} else . end) | .[]" > $TEMPCF
     cat $TEMPCF > $manifest
     > $TEMPCF
     # jq -r "map(.Id |= if .Id == \"$key_id\" then . else . end)"

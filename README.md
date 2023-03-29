@@ -1,6 +1,6 @@
 # Amazon-Connect-Copy User Guide
 
-The Amazon-Connect-Copy script (v1.3.4) copies components from the source Amazon Connect instance
+The Amazon-Connect-Copy script (v1.3.5) copies components from the source Amazon Connect instance
 to the target instance safely, fixing all internal references.
 
 You may use Amazon-Connect-Copy to deploy an Amazon Connect instance across environments
@@ -51,7 +51,7 @@ A note to developers: To contribute, please read [CONTRIBUTING.md](./CONTRIBUTIN
 ## Installation
 
 - Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
-  - Recommend installing the latest version of AWS CLI.
+  - Recommend installing the latest version of AWS CLI (2.9.4 or higher).
 - Install [jq](https://stedolan.github.io/jq/) (if not already installed on your platform).
   - Require `jq` version 1.6 or higher.
 - Copy `bin/*` to your Shell search path (e.g., `cp bin/* /usr/local/bin/`).
@@ -248,6 +248,7 @@ Example:
 - The Amazon-Connect-Copy script does not affect any instance-specific settings outside of
   the Amazon Connect console, such as
   [Amazon Connect service quotas](https://docs.aws.amazon.com/connect/latest/adminguide/amazon-connect-service-limits.html).
+- For Hours of operations, contact flows, and contact flow modules, Description is required in the target instance. If the Description is missing in the source instance, the component name will be used as Description in the target instance in the copying process. (For other component types, Description is optional.)
 - The Amazon-Connect-Copy script requires the following actions to be allowed. Please configure your AWS Profile with a role authorised to perform these actions:
   ```
   connect:AssociateBot
