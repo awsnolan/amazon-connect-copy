@@ -1,0 +1,1067 @@
+#!/bin/bash
+
+############################################################
+#
+# Validate a saved Amazon Connect instance directory
+# Tests every resource type saved by connect_save
+#
+
+VERSION=1.1.0
+SCRIPT_VERSION="$(basename $0) $VERSION"
+
+USAGE=$(cat <<EOD
+Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] instance_alias
+    Validate a saved Amazon Connect instance directory against the live instance.
+
+    instance_alias  Alias of the Connect instance (or path to the directory saved by connect_save)
+    -p profile      AWS Profile to use
+    -m mode         Validation mode:
+                      local   - Validate saved JSON files only (no AWS calls) [default]
+                      live    - Compare saved files against live AWS instance
+                      full    - Run both local and live validations
+    -v              Show version of this script
+    -?              Help
+EOD
+)
+usage() { echo -e "$USAGE" >&2; exit 2; }
+version() { echo -e "$SCRIPT_VERSION"; exit; }
+dos2unix() { tr -d '\r'; }
+
+############################################################
+# Test framework
+############################################################
+
+PASS=0
+FAIL=0
+WARN=0
+SKIP=0
+CURRENT_SECTION=""
+
+section() {
+    CURRENT_SECTION="$1"
+    echo ""
+    echo "━━━ $1 ━━━"
+}
+
+pass() {
+    PASS=$((PASS + 1))
+    echo "  ✓ $1"
+}
+
+fail() {
+    FAIL=$((FAIL + 1))
+    echo "  ✗ $1" >&2
+    if [ -n "$2" ]; then
+        echo "    → $2" >&2
+    fi
+}
+
+warn() {
+    WARN=$((WARN + 1))
+    echo "  ⚠ $1"
+}
+
+skip() {
+    SKIP=$((SKIP + 1))
+    echo "  - $1 (skipped)"
+}
+
+assert_file_exists() {
+    local file="$1"
+    local label="${2:-$file}"
+    if [ -f "$file" ]; then
+        pass "File exists: $label"
+        return 0
+    else
+        fail "File missing: $label"
+        return 1
+    fi
+}
+
+assert_file_nonempty() {
+    local file="$1"
+    local label="${2:-$file}"
+    if [ -s "$file" ]; then
+        pass "File non-empty: $label"
+        return 0
+    else
+        fail "File empty: $label"
+        return 1
+    fi
+}
+
+assert_valid_json() {
+    local file="$1"
+    local label="${2:-$file}"
+    if [ ! -f "$file" ]; then
+        fail "Cannot validate JSON - file missing: $label"
+        return 1
+    fi
+    local err
+    err=$(jq empty "$file" 2>&1)
+    if [ $? -eq 0 ]; then
+        pass "Valid JSON: $label"
+        return 0
+    else
+        fail "Invalid JSON: $label" "$err"
+        return 1
+    fi
+}
+
+assert_jq_field() {
+    # assert_jq_field file jq_expr expected_value label
+    local file="$1" expr="$2" expected="$3" label="${4:-$2}"
+    local actual
+    actual=$(jq -r "$expr" "$file" 2>/dev/null | dos2unix)
+    if [ "$actual" = "$expected" ]; then
+        pass "$label = \"$expected\""
+        return 0
+    else
+        fail "$label" "expected \"$expected\", got \"$actual\""
+        return 1
+    fi
+}
+
+assert_jq_nonempty() {
+    # assert_jq_nonempty file jq_expr label
+    local file="$1" expr="$2" label="${3:-$2}"
+    local actual
+    actual=$(jq -r "$expr" "$file" 2>/dev/null | dos2unix)
+    if [ -n "$actual" ] && [ "$actual" != "null" ]; then
+        pass "$label is set"
+        return 0
+    else
+        fail "$label is empty or null"
+        return 1
+    fi
+}
+
+assert_jq_count_gte() {
+    # assert_jq_count_gte file jq_array_expr min label
+    local file="$1" expr="$2" min="$3" label="${4:-$2}"
+    local count
+    count=$(jq "$expr | length" "$file" 2>/dev/null)
+    if [ -n "$count" ] && [ "$count" -ge "$min" ]; then
+        pass "$label count=$count (>= $min)"
+        return 0
+    else
+        fail "$label count=$count (expected >= $min)"
+        return 1
+    fi
+}
+
+assert_live_match() {
+    # assert_live_match label saved_val live_val
+    local label="$1" saved="$2" live="$3"
+    if [ "$saved" = "$live" ]; then
+        pass "Live match: $label"
+        return 0
+    else
+        fail "Live mismatch: $label" "saved=\"$saved\" live=\"$live\""
+        return 1
+    fi
+}
+
+assert_live_exists() {
+    local label="$1" id="$2"
+    if [ -n "$id" ] && [ "$id" != "null" ]; then
+        pass "Exists in live instance: $label"
+        return 0
+    else
+        fail "Not found in live instance: $label"
+        return 1
+    fi
+}
+
+############################################################
+# AWS CLI wrapper (same pattern as connect_save/copy)
+############################################################
+
+export AWS_DEFAULT_OUTPUT=json
+
+aws_connect() {
+    local cmd=""
+    local ii
+    for ii; do
+        [[ "$ii" == *" "* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
+    done
+    eval "aws connect$profile_flag$cmd" 2>/dev/null
+}
+
+############################################################
+# Argument parsing
+############################################################
+
+profile=
+mode=local
+while getopts "?vp:m:" arg; do
+    case "$arg" in
+    v)  version;;
+    p)  profile=$OPTARG;;
+    m)  mode=$OPTARG;;
+    *)  usage;;
+    esac
+done
+shift $((OPTIND-1))
+
+instance_alias_dir=$1
+instance_alias=$(basename "$instance_alias_dir")
+profile_flag=${profile:+ --profile $profile}
+
+if [ -z "$instance_alias_dir" ]; then
+    usage
+fi
+
+case "$mode" in
+local|live|full) ;;
+*) echo "Invalid mode: $mode. Use local, live, or full." >&2; exit 2;;
+esac
+
+do_local=
+do_live=
+[ "$mode" = "local" ] && do_local=on
+[ "$mode" = "live"  ] && do_live=on
+[ "$mode" = "full"  ] && do_local=on && do_live=on
+
+TEMPFILE=$(mktemp)
+TEMPERR=${TEMPFILE}_err
+trap 'rm -f $TEMPFILE $TEMPERR' EXIT
+touch $TEMPFILE $TEMPERR
+
+cat <<EOD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  connect_validate $VERSION
+  Instance : $instance_alias
+  Directory: $instance_alias_dir
+  Mode     : $mode
+  Profile  : ${profile:-${AWS_PROFILE:-(default)}}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EOD
+
+############################################################
+# 1. Directory & instance bootstrap
+############################################################
+
+section "Instance Directory"
+
+if [ ! -d "$instance_alias_dir" ]; then
+    fail "Instance directory does not exist: $instance_alias_dir"
+    echo ""
+    echo "Run connect_save first to populate the directory."
+    exit 1
+fi
+pass "Directory exists: $instance_alias_dir"
+
+for required in instance.json instance.var prompts.json hours.json queues.json \
+                routings.json modules.json flows.json; do
+    assert_file_exists "$instance_alias_dir/$required"
+done
+
+assert_valid_json "$instance_alias_dir/instance.json"
+
+instance_id=$(jq -r ".Id" "$instance_alias_dir/instance.json" 2>/dev/null | dos2unix)
+instance_arn=$(jq -r ".Arn" "$instance_alias_dir/instance.json" 2>/dev/null | dos2unix)
+assert_jq_nonempty "$instance_alias_dir/instance.json" ".Id" "Instance ID"
+assert_jq_nonempty "$instance_alias_dir/instance.json" ".Arn" "Instance ARN"
+assert_jq_field "$instance_alias_dir/instance.json" ".InstanceAlias" "$instance_alias" "Instance alias"
+
+if [ -n "$do_live" ]; then
+    section "Instance (Live)"
+    live_instance=$(aws_connect describe-instance --instance-id "$instance_id" 2>/dev/null)
+    if [ -n "$live_instance" ]; then
+        pass "Instance reachable in AWS"
+        live_alias=$(echo "$live_instance" | jq -r ".Instance.InstanceAlias" | dos2unix)
+        assert_live_match "InstanceAlias" "$instance_alias" "$live_alias"
+        live_status=$(echo "$live_instance" | jq -r ".Instance.InstanceStatus" | dos2unix)
+        assert_live_match "InstanceStatus" "ACTIVE" "$live_status"
+    else
+        fail "Cannot reach instance in AWS - check profile/permissions"
+    fi
+fi
+
+############################################################
+# 2. Prompts
+############################################################
+
+section "Prompts (Local)"
+assert_valid_json "$instance_alias_dir/prompts.json"
+prompt_count=$(jq -s "length" "$instance_alias_dir/prompts.json" 2>/dev/null)
+echo "  → $prompt_count prompts in manifest"
+
+if [ -n "$do_live" ]; then
+    section "Prompts (Live)"
+    live_prompts=$(aws_connect list-prompts --instance-id "$instance_id" --max-items 999)
+    if [ -n "$live_prompts" ]; then
+        live_count=$(echo "$live_prompts" | jq ".PromptSummaryList | length")
+        saved_count=$(jq -s "length" "$instance_alias_dir/prompts.json")
+        if [ "$saved_count" -le "$live_count" ]; then
+            pass "Prompt count: saved=$saved_count live=$live_count"
+        else
+            warn "Saved prompt count ($saved_count) exceeds live count ($live_count) - instance may have changed"
+        fi
+        # Verify each saved prompt exists live
+        jq -r ".Name" "$instance_alias_dir/prompts.json" | dos2unix |
+        while read pname; do
+            exists=$(echo "$live_prompts" | jq -r ".PromptSummaryList[] | select(.Name == \"${pname//\"/\\\"}\") | .Id")
+            assert_live_exists "Prompt: $pname" "$exists"
+        done
+    else
+        fail "Could not retrieve live prompts"
+    fi
+fi
+
+############################################################
+# 3. Hours of Operations
+############################################################
+
+section "Hours of Operations (Local)"
+assert_valid_json "$instance_alias_dir/hours.json"
+jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hours.json" | dos2unix |
+while read hour_id hour_name; do
+    hour_enc=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$hour_name', safe=''))" 2>/dev/null || \
+               printf '%s' "$hour_name" | od -An -vtx1 | tr -d ' \n' | sed 's/../%&/g')
+    hour_file="$instance_alias_dir/hour_$(echo "$hour_name" | sed 's/ /%20/g').json"
+    # Try encoded filename
+    found_file=$(ls "$instance_alias_dir"/hour_*.json 2>/dev/null | \
+        while read f; do
+            n=$(jq -r ".HoursOfOperation.Name" "$f" 2>/dev/null)
+            [ "$n" = "$hour_name" ] && echo "$f" && break
+        done)
+    if [ -n "$found_file" ]; then
+        assert_valid_json "$found_file" "hour: $hour_name"
+        assert_jq_nonempty "$found_file" ".HoursOfOperation.HoursOfOperationId" "HoursOfOperationId ($hour_name)"
+        assert_jq_nonempty "$found_file" ".HoursOfOperation.Config" "Config ($hour_name)"
+        assert_jq_nonempty "$found_file" ".HoursOfOperation.TimeZone" "TimeZone ($hour_name)"
+    else
+        fail "Detail file missing for hour: $hour_name"
+    fi
+done
+
+if [ -n "$do_live" ]; then
+    section "Hours of Operations (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hours.json" | dos2unix |
+    while read hour_id hour_name; do
+        live=$(aws_connect describe-hours-of-operation \
+            --instance-id "$instance_id" \
+            --hours-of-operation-id "$hour_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $hour_name"
+            live_name=$(echo "$live" | jq -r ".HoursOfOperation.Name" | dos2unix)
+            assert_live_match "Name ($hour_name)" "$hour_name" "$live_name"
+        else
+            fail "Not found live: $hour_name (id=$hour_id)"
+        fi
+    done
+fi
+
+############################################################
+# 4. Queues
+############################################################
+
+section "Queues (Local)"
+assert_valid_json "$instance_alias_dir/queues.json"
+queue_count=$(jq -s "length" "$instance_alias_dir/queues.json")
+echo "  → $queue_count queues in manifest"
+
+for qfile in "$instance_alias_dir"/queue_*.json; do
+    [ -f "$qfile" ] || continue
+    assert_valid_json "$qfile" "$(basename $qfile)"
+    assert_jq_nonempty "$qfile" ".Queue.QueueId"    "QueueId ($(basename $qfile))"
+    assert_jq_nonempty "$qfile" ".Queue.Name"       "Name ($(basename $qfile))"
+    assert_jq_nonempty "$qfile" ".Queue.QueueArn"   "QueueArn ($(basename $qfile))"
+    assert_jq_nonempty "$qfile" ".Queue.HoursOfOperationId" "HoursOfOperationId ($(basename $qfile))"
+done
+
+if [ -n "$do_live" ]; then
+    section "Queues (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" | dos2unix |
+    while read queue_id queue_name; do
+        live=$(aws_connect describe-queue \
+            --instance-id "$instance_id" \
+            --queue-id "$queue_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $queue_name"
+            live_name=$(echo "$live" | jq -r ".Queue.Name" | dos2unix)
+            assert_live_match "Name ($queue_name)" "$queue_name" "$live_name"
+            live_status=$(echo "$live" | jq -r ".Queue.Status" | dos2unix)
+            if [ "$live_status" = "ENABLED" ]; then
+                pass "Queue enabled: $queue_name"
+            else
+                warn "Queue not enabled: $queue_name (status=$live_status)"
+            fi
+        else
+            fail "Not found live: $queue_name (id=$queue_id)"
+        fi
+    done
+fi
+
+############################################################
+# 5. Quick Connects
+############################################################
+
+section "Quick Connects (Local)"
+if [ -f "$instance_alias_dir/quickconnects.json" ]; then
+    assert_valid_json "$instance_alias_dir/quickconnects.json"
+    qc_count=$(jq -s "length" "$instance_alias_dir/quickconnects.json")
+    echo "  → $qc_count quick connects in manifest"
+    for qcfile in "$instance_alias_dir"/quickconnect_*.json; do
+        [ -f "$qcfile" ] || continue
+        assert_valid_json "$qcfile" "$(basename $qcfile)"
+        assert_jq_nonempty "$qcfile" ".QuickConnect.QuickConnectId"  "QuickConnectId ($(basename $qcfile))"
+        assert_jq_nonempty "$qcfile" ".QuickConnect.Name"            "Name ($(basename $qcfile))"
+        assert_jq_nonempty "$qcfile" ".QuickConnect.QuickConnectConfig.QuickConnectType" \
+                           "QuickConnectType ($(basename $qcfile))"
+    done
+else
+    skip "quickconnects.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/quickconnects.json" ]; then
+    section "Quick Connects (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/quickconnects.json" | dos2unix |
+    while read qc_id qc_name; do
+        live=$(aws_connect describe-quick-connect \
+            --instance-id "$instance_id" \
+            --quick-connect-id "$qc_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $qc_name"
+            live_name=$(echo "$live" | jq -r ".QuickConnect.Name" | dos2unix)
+            assert_live_match "Name ($qc_name)" "$qc_name" "$live_name"
+        else
+            fail "Not found live: $qc_name (id=$qc_id)"
+        fi
+    done
+fi
+
+############################################################
+# 6. Routing Profiles
+############################################################
+
+section "Routing Profiles (Local)"
+assert_valid_json "$instance_alias_dir/routings.json"
+routing_count=$(jq -s "length" "$instance_alias_dir/routings.json")
+echo "  → $routing_count routing profiles in manifest"
+
+for rfile in "$instance_alias_dir"/routing_*.json; do
+    [ -f "$rfile" ] || { continue; }
+    # Skip routingQs files
+    [[ "$rfile" == *routingQs* ]] && continue
+    assert_valid_json "$rfile" "$(basename $rfile)"
+    assert_jq_nonempty "$rfile" ".RoutingProfile.RoutingProfileId"  "RoutingProfileId ($(basename $rfile))"
+    assert_jq_nonempty "$rfile" ".RoutingProfile.Name"              "Name ($(basename $rfile))"
+    assert_jq_nonempty "$rfile" ".RoutingProfile.DefaultOutboundQueueId" \
+                       "DefaultOutboundQueueId ($(basename $rfile))"
+    assert_jq_nonempty "$rfile" ".RoutingProfile.MediaConcurrencies" \
+                       "MediaConcurrencies ($(basename $rfile))"
+    # Validate corresponding routingQs file exists
+    rname=$(jq -r ".RoutingProfile.Name" "$rfile" | dos2unix)
+    rname_enc=$(basename "$rfile" | sed 's/^routing_//' | sed 's/\.json$//')
+    rqs_file="$instance_alias_dir/routingQs_${rname_enc}.json"
+    assert_file_exists "$rqs_file" "routingQs for: $rname"
+    [ -f "$rqs_file" ] && assert_valid_json "$rqs_file" "routingQs: $rname"
+done
+
+if [ -n "$do_live" ]; then
+    section "Routing Profiles (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/routings.json" | dos2unix |
+    while read rp_id rp_name; do
+        live=$(aws_connect describe-routing-profile \
+            --instance-id "$instance_id" \
+            --routing-profile-id "$rp_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $rp_name"
+            live_name=$(echo "$live" | jq -r ".RoutingProfile.Name" | dos2unix)
+            assert_live_match "Name ($rp_name)" "$rp_name" "$live_name"
+        else
+            fail "Not found live: $rp_name (id=$rp_id)"
+        fi
+    done
+fi
+
+############################################################
+# 7. Agent Statuses
+############################################################
+
+section "Agent Statuses (Local)"
+if [ -f "$instance_alias_dir/agentstatuses.json" ]; then
+    assert_valid_json "$instance_alias_dir/agentstatuses.json"
+    as_count=$(jq -s "length" "$instance_alias_dir/agentstatuses.json")
+    echo "  → $as_count agent statuses in manifest"
+    for asfile in "$instance_alias_dir"/agentstatus_*.json; do
+        [ -f "$asfile" ] || continue
+        assert_valid_json "$asfile" "$(basename $asfile)"
+        assert_jq_nonempty "$asfile" ".AgentStatus.AgentStatusId" "AgentStatusId ($(basename $asfile))"
+        assert_jq_nonempty "$asfile" ".AgentStatus.Name"          "Name ($(basename $asfile))"
+        assert_jq_nonempty "$asfile" ".AgentStatus.State"         "State ($(basename $asfile))"
+        assert_jq_nonempty "$asfile" ".AgentStatus.Type"          "Type ($(basename $asfile))"
+        # Type must be CUSTOM (built-ins are not exported)
+        assert_jq_field "$asfile" ".AgentStatus.Type" "CUSTOM" "Type=CUSTOM ($(basename $asfile))"
+    done
+else
+    skip "agentstatuses.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/agentstatuses.json" ]; then
+    section "Agent Statuses (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/agentstatuses.json" | dos2unix |
+    while read as_id as_name; do
+        live=$(aws_connect describe-agent-status \
+            --instance-id "$instance_id" \
+            --agent-status-id "$as_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $as_name"
+            live_name=$(echo "$live" | jq -r ".AgentStatus.Name" | dos2unix)
+            assert_live_match "Name ($as_name)" "$as_name" "$live_name"
+        else
+            fail "Not found live: $as_name (id=$as_id)"
+        fi
+    done
+fi
+
+############################################################
+# 8. Security Profiles
+############################################################
+
+section "Security Profiles (Local)"
+if [ -f "$instance_alias_dir/securityprofiles.json" ]; then
+    assert_valid_json "$instance_alias_dir/securityprofiles.json"
+    sp_count=$(jq -s "length" "$instance_alias_dir/securityprofiles.json")
+    echo "  → $sp_count security profiles in manifest"
+    for spfile in "$instance_alias_dir"/securityprofile_*.json; do
+        [ -f "$spfile" ] || continue
+        [[ "$spfile" == *Perms* ]] && continue
+        assert_valid_json "$spfile" "$(basename $spfile)"
+        assert_jq_nonempty "$spfile" ".SecurityProfile.Id"   "Id ($(basename $spfile))"
+        assert_jq_nonempty "$spfile" ".SecurityProfile.Name" "Name ($(basename $spfile))"
+        sp_name=$(jq -r ".SecurityProfile.Name" "$spfile" | dos2unix)
+        sp_enc=$(basename "$spfile" | sed 's/^securityprofile_//' | sed 's/\.json$//')
+        perms_file="$instance_alias_dir/securityprofilePerms_${sp_enc}.json"
+        assert_file_exists "$perms_file" "permissions file for: $sp_name"
+        [ -f "$perms_file" ] && assert_valid_json "$perms_file" "permissions: $sp_name"
+    done
+else
+    skip "securityprofiles.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/securityprofiles.json" ]; then
+    section "Security Profiles (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/securityprofiles.json" | dos2unix |
+    while read sp_id sp_name; do
+        live=$(aws_connect describe-security-profile \
+            --instance-id "$instance_id" \
+            --security-profile-id "$sp_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $sp_name"
+            live_name=$(echo "$live" | jq -r ".SecurityProfile.Name" | dos2unix)
+            assert_live_match "Name ($sp_name)" "$sp_name" "$live_name"
+        else
+            fail "Not found live: $sp_name (id=$sp_id)"
+        fi
+    done
+fi
+
+############################################################
+# 9. Predefined Attributes
+############################################################
+
+section "Predefined Attributes (Local)"
+if [ -f "$instance_alias_dir/predefinedattributes.json" ]; then
+    assert_valid_json "$instance_alias_dir/predefinedattributes.json"
+    pa_count=$(jq "if type==\"array\" then length else 1 end" "$instance_alias_dir/predefinedattributes.json")
+    echo "  → $pa_count predefined attributes in manifest"
+    for pafile in "$instance_alias_dir"/predefinedattribute_*.json; do
+        [ -f "$pafile" ] || continue
+        assert_valid_json "$pafile" "$(basename $pafile)"
+        assert_jq_nonempty "$pafile" ".PredefinedAttribute.Name"   "Name ($(basename $pafile))"
+        assert_jq_nonempty "$pafile" ".PredefinedAttribute.Values" "Values ($(basename $pafile))"
+    done
+else
+    skip "predefinedattributes.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/predefinedattributes.json" ]; then
+    section "Predefined Attributes (Live)"
+    jq -r ".Name" "$instance_alias_dir/predefinedattributes.json" 2>/dev/null | dos2unix |
+    while read pa_name; do
+        [ -z "$pa_name" ] && continue
+        live=$(aws_connect describe-predefined-attribute \
+            --instance-id "$instance_id" \
+            --name "$pa_name" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $pa_name"
+        else
+            fail "Not found live: $pa_name"
+        fi
+    done
+fi
+
+############################################################
+# 10. Task Templates
+############################################################
+
+section "Task Templates (Local)"
+if [ -f "$instance_alias_dir/tasktemplates.json" ]; then
+    assert_valid_json "$instance_alias_dir/tasktemplates.json"
+    tt_count=$(jq "if type==\"array\" then length else 1 end" "$instance_alias_dir/tasktemplates.json")
+    echo "  → $tt_count task templates in manifest"
+    for ttfile in "$instance_alias_dir"/tasktemplate_*.json; do
+        [ -f "$ttfile" ] || continue
+        assert_valid_json "$ttfile" "$(basename $ttfile)"
+        assert_jq_nonempty "$ttfile" ".Id"   "Id ($(basename $ttfile))"
+        assert_jq_nonempty "$ttfile" ".Name" "Name ($(basename $ttfile))"
+        assert_jq_nonempty "$ttfile" ".Status" "Status ($(basename $ttfile))"
+        # Status should be ACTIVE for usable templates
+        tt_status=$(jq -r ".Status" "$ttfile" | dos2unix)
+        if [ "$tt_status" = "ACTIVE" ]; then
+            pass "Status=ACTIVE: $(basename $ttfile)"
+        else
+            warn "Status=$tt_status (not ACTIVE): $(basename $ttfile)"
+        fi
+    done
+else
+    skip "tasktemplates.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/tasktemplates.json" ]; then
+    section "Task Templates (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/tasktemplates.json" 2>/dev/null | dos2unix |
+    while read tt_id tt_name; do
+        [ -z "$tt_id" ] && continue
+        live=$(aws_connect get-task-template \
+            --instance-id "$instance_id" \
+            --task-template-id "$tt_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $tt_name"
+            live_name=$(echo "$live" | jq -r ".Name" | dos2unix)
+            assert_live_match "Name ($tt_name)" "$tt_name" "$live_name"
+        else
+            fail "Not found live: $tt_name (id=$tt_id)"
+        fi
+    done
+fi
+
+############################################################
+# 11. Evaluation Forms
+############################################################
+
+section "Evaluation Forms (Local)"
+if [ -f "$instance_alias_dir/evaluationforms.json" ]; then
+    assert_valid_json "$instance_alias_dir/evaluationforms.json"
+    ef_count=$(jq "if type==\"array\" then length else 1 end" "$instance_alias_dir/evaluationforms.json")
+    echo "  → $ef_count evaluation forms in manifest"
+    for effile in "$instance_alias_dir"/evaluationform_*.json; do
+        [ -f "$effile" ] || continue
+        assert_valid_json "$effile" "$(basename $effile)"
+        assert_jq_nonempty "$effile" ".EvaluationForm.EvaluationFormId" "EvaluationFormId ($(basename $effile))"
+        assert_jq_nonempty "$effile" ".EvaluationForm.Title"            "Title ($(basename $effile))"
+        assert_jq_nonempty "$effile" ".EvaluationForm.Items"            "Items ($(basename $effile))"
+        assert_jq_nonempty "$effile" ".EvaluationForm.Status"           "Status ($(basename $effile))"
+        ef_status=$(jq -r ".EvaluationForm.Status" "$effile" | dos2unix)
+        if [ "$ef_status" = "ACTIVE" ]; then
+            pass "Status=ACTIVE: $(basename $effile)"
+        else
+            warn "Status=$ef_status (not ACTIVE): $(basename $effile)"
+        fi
+    done
+else
+    skip "evaluationforms.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/evaluationforms.json" ]; then
+    section "Evaluation Forms (Live)"
+    jq -r ".EvaluationFormId + \" \" + .Title" "$instance_alias_dir/evaluationforms.json" 2>/dev/null | dos2unix |
+    while read ef_id ef_title; do
+        [ -z "$ef_id" ] && continue
+        live=$(aws_connect describe-evaluation-form \
+            --instance-id "$instance_id" \
+            --evaluation-form-id "$ef_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $ef_title"
+            live_title=$(echo "$live" | jq -r ".EvaluationForm.Title" | dos2unix)
+            assert_live_match "Title ($ef_title)" "$ef_title" "$live_title"
+        else
+            fail "Not found live: $ef_title (id=$ef_id)"
+        fi
+    done
+fi
+
+############################################################
+# 12. Rules
+############################################################
+
+section "Rules (Local)"
+if [ -f "$instance_alias_dir/rules.json" ]; then
+    assert_valid_json "$instance_alias_dir/rules.json"
+    rule_count=$(jq "if type==\"array\" then length else 1 end" "$instance_alias_dir/rules.json")
+    echo "  → $rule_count rules in manifest"
+    for rulefile in "$instance_alias_dir"/rule_*.json; do
+        [ -f "$rulefile" ] || continue
+        assert_valid_json "$rulefile" "$(basename $rulefile)"
+        assert_jq_nonempty "$rulefile" ".Rule.RuleId"        "RuleId ($(basename $rulefile))"
+        assert_jq_nonempty "$rulefile" ".Rule.Name"          "Name ($(basename $rulefile))"
+        assert_jq_nonempty "$rulefile" ".Rule.TriggerEventSource" "TriggerEventSource ($(basename $rulefile))"
+        assert_jq_nonempty "$rulefile" ".Rule.Actions"       "Actions ($(basename $rulefile))"
+        assert_jq_nonempty "$rulefile" ".Rule.PublishStatus" "PublishStatus ($(basename $rulefile))"
+        rule_status=$(jq -r ".Rule.PublishStatus" "$rulefile" | dos2unix)
+        if [ "$rule_status" = "PUBLISHED" ]; then
+            pass "PublishStatus=PUBLISHED: $(basename $rulefile)"
+        else
+            warn "PublishStatus=$rule_status (not PUBLISHED): $(basename $rulefile)"
+        fi
+    done
+else
+    skip "rules.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/rules.json" ]; then
+    section "Rules (Live)"
+    jq -r ".RuleId + \" \" + .Name" "$instance_alias_dir/rules.json" 2>/dev/null | dos2unix |
+    while read rule_id rule_name; do
+        [ -z "$rule_id" ] && continue
+        live=$(aws_connect describe-rule \
+            --instance-id "$instance_id" \
+            --rule-id "$rule_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $rule_name"
+            live_name=$(echo "$live" | jq -r ".Rule.Name" | dos2unix)
+            assert_live_match "Name ($rule_name)" "$rule_name" "$live_name"
+        else
+            fail "Not found live: $rule_name (id=$rule_id)"
+        fi
+    done
+fi
+
+############################################################
+# 13. Views
+############################################################
+
+section "Views (Local)"
+if [ -f "$instance_alias_dir/views.json" ]; then
+    assert_valid_json "$instance_alias_dir/views.json"
+    view_count=$(jq "if type==\"array\" then length else 1 end" "$instance_alias_dir/views.json")
+    echo "  → $view_count views in manifest"
+    for viewfile in "$instance_alias_dir"/view_*.json; do
+        [ -f "$viewfile" ] || continue
+        assert_valid_json "$viewfile" "$(basename $viewfile)"
+        assert_jq_nonempty "$viewfile" ".View.Id"      "Id ($(basename $viewfile))"
+        assert_jq_nonempty "$viewfile" ".View.Name"    "Name ($(basename $viewfile))"
+        assert_jq_nonempty "$viewfile" ".View.Content" "Content ($(basename $viewfile))"
+        assert_jq_nonempty "$viewfile" ".View.Status"  "Status ($(basename $viewfile))"
+        view_status=$(jq -r ".View.Status" "$viewfile" | dos2unix)
+        if [ "$view_status" = "PUBLISHED" ]; then
+            pass "Status=PUBLISHED: $(basename $viewfile)"
+        else
+            warn "Status=$view_status (not PUBLISHED): $(basename $viewfile)"
+        fi
+    done
+else
+    skip "views.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/views.json" ]; then
+    section "Views (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/views.json" 2>/dev/null | dos2unix |
+    while read view_id view_name; do
+        [ -z "$view_id" ] && continue
+        live=$(aws_connect describe-view \
+            --instance-id "$instance_id" \
+            --view-id "$view_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $view_name"
+            live_name=$(echo "$live" | jq -r ".View.Name" | dos2unix)
+            assert_live_match "Name ($view_name)" "$view_name" "$live_name"
+        else
+            fail "Not found live: $view_name (id=$view_id)"
+        fi
+    done
+fi
+
+############################################################
+# 14. Contact Flow Modules
+############################################################
+
+section "Contact Flow Modules (Local)"
+assert_valid_json "$instance_alias_dir/modules.json"
+module_count=$(jq -s "length" "$instance_alias_dir/modules.json")
+echo "  → $module_count contact flow modules in manifest"
+
+for mfile in "$instance_alias_dir"/module_*.json; do
+    [ -f "$mfile" ] || continue
+    # module files contain raw flow JSON (not wrapped), validate as JSON
+    assert_valid_json "$mfile" "$(basename $mfile)"
+    # Must have Actions array
+    action_count=$(jq ".Actions | length" "$mfile" 2>/dev/null)
+    if [ -n "$action_count" ] && [ "$action_count" -gt 0 ]; then
+        pass "Has Actions ($action_count): $(basename $mfile)"
+    else
+        fail "No Actions found: $(basename $mfile)"
+    fi
+    # Must have a Version field
+    assert_jq_nonempty "$mfile" ".Version" "Version ($(basename $mfile))"
+done
+
+if [ -n "$do_live" ]; then
+    section "Contact Flow Modules (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/modules.json" | dos2unix |
+    while read mod_id mod_name; do
+        live=$(aws_connect describe-contact-flow-module \
+            --instance-id "$instance_id" \
+            --contact-flow-module-id "$mod_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $mod_name"
+            live_status=$(echo "$live" | jq -r ".ContactFlowModule.Status" | dos2unix)
+            if [ "$live_status" = "published" ]; then
+                pass "Published: $mod_name"
+            else
+                warn "Status=$live_status (not published): $mod_name"
+            fi
+        else
+            fail "Not found live: $mod_name (id=$mod_id)"
+        fi
+    done
+fi
+
+############################################################
+# 15. Contact Flows
+############################################################
+
+section "Contact Flows (Local)"
+assert_valid_json "$instance_alias_dir/flows.json"
+flow_count=$(jq -s "length" "$instance_alias_dir/flows.json")
+echo "  → $flow_count contact flows in manifest"
+
+for ffile in "$instance_alias_dir"/flow_*.json; do
+    [ -f "$ffile" ] || continue
+    assert_valid_json "$ffile" "$(basename $ffile)"
+    # Must have Actions array
+    action_count=$(jq ".Actions | length" "$ffile" 2>/dev/null)
+    if [ -n "$action_count" ] && [ "$action_count" -gt 0 ]; then
+        pass "Has Actions ($action_count): $(basename $ffile)"
+    else
+        fail "No Actions found: $(basename $ffile)"
+    fi
+    assert_jq_nonempty "$ffile" ".Version" "Version ($(basename $ffile))"
+    assert_jq_nonempty "$ffile" ".StartAction" "StartAction ($(basename $ffile))"
+    # Validate StartAction references a real action identifier
+    start_id=$(jq -r ".StartAction" "$ffile" 2>/dev/null)
+    id_exists=$(jq -r ".Actions[] | select(.Identifier == \"$start_id\") | .Identifier" "$ffile" 2>/dev/null)
+    if [ -n "$id_exists" ]; then
+        pass "StartAction resolves: $(basename $ffile)"
+    else
+        fail "StartAction \"$start_id\" not found in Actions: $(basename $ffile)"
+    fi
+done
+
+if [ -n "$do_live" ]; then
+    section "Contact Flows (Live)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/flows.json" | dos2unix |
+    while read flow_id flow_name; do
+        live=$(aws_connect describe-contact-flow \
+            --instance-id "$instance_id" \
+            --contact-flow-id "$flow_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $flow_name"
+            live_state=$(echo "$live" | jq -r ".ContactFlow.State" | dos2unix)
+            if [ "$live_state" = "ACTIVE" ]; then
+                pass "State=ACTIVE: $flow_name"
+            else
+                warn "State=$live_state (not ACTIVE): $flow_name"
+            fi
+        else
+            fail "Not found live: $flow_name (id=$flow_id)"
+        fi
+    done
+fi
+
+############################################################
+# 16. Cross-reference integrity checks
+############################################################
+
+section "Cross-Reference Integrity (Local)"
+
+# Build a set of all known IDs from saved files
+known_ids_file="${TEMPFILE}_ids"
+> "$known_ids_file"
+
+# Collect IDs from all manifest files
+for manifest in hours queues quickconnects routings agentstatuses securityprofiles; do
+    mfile="$instance_alias_dir/${manifest}.json"
+    [ -f "$mfile" ] || continue
+    jq -r ".Id // .HoursOfOperationId // .QuickConnectId // .RoutingProfileId // .AgentStatusId // .SecurityProfileId // empty" \
+        "$mfile" 2>/dev/null >> "$known_ids_file"
+done
+# Also collect from detail files
+for detail in "$instance_alias_dir"/hour_*.json; do
+    [ -f "$detail" ] || continue
+    jq -r ".HoursOfOperation.HoursOfOperationId // empty" "$detail" 2>/dev/null >> "$known_ids_file"
+done
+for detail in "$instance_alias_dir"/queue_*.json; do
+    [ -f "$detail" ] || continue
+    jq -r ".Queue.QueueId // empty" "$detail" 2>/dev/null >> "$known_ids_file"
+done
+
+known_count=$(wc -l < "$known_ids_file" | tr -d ' ')
+echo "  → $known_count known IDs collected for cross-reference"
+
+# Check flows for unresolved ARN references
+unresolved=0
+for ffile in "$instance_alias_dir"/flow_*.json "$instance_alias_dir"/module_*.json; do
+    [ -f "$ffile" ] || continue
+    # Extract all connect ARN IDs referenced in the flow
+    while IFS= read -r ref_id; do
+        [ -z "$ref_id" ] && continue
+        if ! grep -qF "$ref_id" "$known_ids_file" 2>/dev/null; then
+            warn "Unresolved reference in $(basename $ffile): $ref_id"
+            unresolved=$((unresolved + 1))
+        fi
+    done < <(jq -r '.. | strings | select(test("arn:aws:connect:")) | split("/") | last' "$ffile" 2>/dev/null | sort -u)
+done
+if [ "$unresolved" -eq 0 ]; then
+    pass "All flow ARN references resolve to known IDs"
+fi
+
+# Verify routing profile default outbound queues exist
+for rfile in "$instance_alias_dir"/routing_*.json; do
+    [ -f "$rfile" ] || continue
+    [[ "$rfile" == *routingQs* ]] && continue
+    rp_name=$(jq -r ".RoutingProfile.Name" "$rfile" | dos2unix)
+    doq_id=$(jq -r ".RoutingProfile.DefaultOutboundQueueId" "$rfile" | dos2unix)
+    if grep -qF "$doq_id" "$known_ids_file" 2>/dev/null; then
+        pass "DefaultOutboundQueue resolves: $rp_name"
+    else
+        fail "DefaultOutboundQueue not found: $rp_name (id=$doq_id)"
+    fi
+done
+
+# Verify queue HoursOfOperation references exist
+for qfile in "$instance_alias_dir"/queue_*.json; do
+    [ -f "$qfile" ] || continue
+    q_name=$(jq -r ".Queue.Name" "$qfile" | dos2unix)
+    hoo_id=$(jq -r ".Queue.HoursOfOperationId" "$qfile" | dos2unix)
+    if grep -qF "$hoo_id" "$known_ids_file" 2>/dev/null; then
+        pass "HoursOfOperation resolves: $q_name"
+    else
+        fail "HoursOfOperation not found for queue: $q_name (id=$hoo_id)"
+    fi
+done
+
+rm -f "$known_ids_file"
+
+############################################################
+# 17. Phone Numbers
+############################################################
+
+section "Phone Numbers (Local)"
+if [ -f "$instance_alias_dir/phonenumbers.json" ]; then
+    assert_valid_json "$instance_alias_dir/phonenumbers.json"
+    pn_count=$(jq -s "length" "$instance_alias_dir/phonenumbers.json")
+    echo "  → $pn_count phone numbers in manifest"
+    for pnfile in "$instance_alias_dir"/phonenumber_*.json; do
+        [ -f "$pnfile" ] || continue
+        assert_valid_json "$pnfile" "$(basename $pnfile)"
+        assert_jq_nonempty "$pnfile" ".ClaimedPhoneNumberSummary.PhoneNumberId"     "PhoneNumberId ($(basename $pnfile))"
+        assert_jq_nonempty "$pnfile" ".ClaimedPhoneNumberSummary.PhoneNumber"       "PhoneNumber ($(basename $pnfile))"
+        assert_jq_nonempty "$pnfile" ".ClaimedPhoneNumberSummary.PhoneNumberStatus" "Status ($(basename $pnfile))"
+        pn_status=$(jq -r ".ClaimedPhoneNumberSummary.PhoneNumberStatus.Status" "$pnfile" | dos2unix)
+        if [ "$pn_status" = "CLAIMED" ]; then
+            pass "Status=CLAIMED: $(basename $pnfile)"
+        else
+            warn "Status=$pn_status (not CLAIMED): $(basename $pnfile)"
+        fi
+    done
+else
+    skip "phonenumbers.json not found (run connect_save >= 1.4.0)"
+fi
+
+if [ -n "$do_live" ] && [ -f "$instance_alias_dir/phonenumbers.json" ]; then
+    section "Phone Numbers (Live)"
+    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" 2>/dev/null | dos2unix |
+    while read pn_id pn_number; do
+        [ -z "$pn_id" ] && continue
+        live=$(aws_connect describe-phone-number \
+            --phone-number-id "$pn_id" 2>/dev/null)
+        if [ -n "$live" ]; then
+            pass "Exists live: $pn_number"
+        else
+            fail "Not found live: $pn_number (id=$pn_id)"
+        fi
+    done
+fi
+
+############################################################
+# 18. Vocabularies
+############################################################
+
+section "Vocabularies (Local)"
+if [ -f "$instance_alias_dir/vocabularies.json" ]; then
+    assert_valid_json "$instance_alias_dir/vocabularies.json"
+    vocab_count=$(jq "if type==\"array\" then length else 1 end" "$instance_alias_dir/vocabularies.json")
+    echo "  → $vocab_count vocabularies in manifest"
+else
+    skip "vocabularies.json not found (run connect_save >= 1.4.0)"
+fi
+
+############################################################
+# 19. SED file integrity (if helper dir provided)
+############################################################
+
+section "Helper SED File"
+# Look for helper.sed in common locations relative to instance dir
+helper_sed_candidates=(
+    "$(dirname "$instance_alias_dir")/helper/helper.sed"
+    "$(dirname "$instance_alias_dir")/helper.sed"
+)
+helper_sed_found=
+for candidate in "${helper_sed_candidates[@]}"; do
+    if [ -f "$candidate" ]; then
+        helper_sed_found="$candidate"
+        break
+    fi
+done
+
+if [ -n "$helper_sed_found" ]; then
+    pass "helper.sed found: $helper_sed_found"
+    # Verify instance ID substitution is present
+    if grep -q "$instance_id" "$helper_sed_found" 2>/dev/null; then
+        pass "Instance ID substitution present in helper.sed"
+    else
+        warn "Instance ID not found in helper.sed - may not have been diffed yet"
+    fi
+    # Check for syntax errors in sed file
+    sed_err=$(sed -n -f "$helper_sed_found" /dev/null 2>&1)
+    if [ -z "$sed_err" ]; then
+        pass "helper.sed syntax valid"
+    else
+        fail "helper.sed syntax error" "$sed_err"
+    fi
+else
+    skip "helper.sed not found (run connect_diff to generate)"
+fi
+
+############################################################
+# Summary
+############################################################
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Results"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ✓ Passed : $PASS"
+echo "  ✗ Failed : $FAIL"
+echo "  ⚠ Warnings: $WARN"
+echo "  - Skipped: $SKIP"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+if [ "$FAIL" -gt 0 ]; then
+    echo ""
+    echo "  $FAIL test(s) failed. Review errors above."
+    exit 1
+elif [ "$WARN" -gt 0 ]; then
+    echo ""
+    echo "  All tests passed with $WARN warning(s). Review warnings above."
+    exit 0
+else
+    echo ""
+    echo "  All tests passed."
+    exit 0
+fi

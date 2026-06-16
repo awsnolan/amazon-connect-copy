@@ -3,9 +3,9 @@
 ############################################################
 #
 # Get a list of components of an Amazon Connect instance
-#
+# add more
 
-VERSION=1.3.5
+VERSION=1.5.0
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
@@ -107,13 +107,11 @@ add_json_attribute() {
     attr_value=$2
     key_id=$3
     manifest=$4
-    #echo "Adding $attr_name=\"$attr_value\" to $key_id in $manifest"
     # TEMPCF reused and needs to be emptied afterwards
     cat $manifest |
     jq -rs "map(if .Id == \"$key_id\" then . + {$attr_name: \"${attr_value//\"/\\\"}\"} else . end) | .[]" > $TEMPCF
     cat $TEMPCF > $manifest
     > $TEMPCF
-    # jq -r "map(.Id |= if .Id == \"$key_id\" then . else . end)"
 }
 
 aws_connect() {
@@ -147,7 +145,6 @@ ignore_improper_extended_ascii=
 ignore_prefix=
 jq_prefix_filter=
 jq_prefix_filter_text=
-# codepage=${LANG##*.}
 eval $(locale -k LC_CTYPE | grep charmap)
 codepage=${charmap:-$aws_cli_encoding}
 codepage=${codepage##*.}
@@ -255,6 +252,221 @@ echo "instance_contact_flow_prefix=\"$contact_flow_prefix\"" >> "$instance_alias
 
 ############################################################
 #
+# Instance Attributes (feature flags: Contact Lens, recording, etc.)
+#
+
+instance_attribute_types="INBOUND_CALLS OUTBOUND_CALLS CONTACTFLOW_LOGS CONTACT_LENS AUTO_RESOLVE_BEST_VOICES USE_CUSTOM_TTS_VOICES EARLY_MEDIA MULTI_PARTY_CONFERENCE MULTI_PARTY_CHAT_CONFERENCE"
+
+> "$instance_alias_dir/instance_attributes.json"
+for attr_type in $instance_attribute_types; do
+    aws_connect describe-instance-attribute \
+        --instance-id $instance_id \
+        --attribute-type $attr_type \
+        >> "$instance_alias_dir/instance_attributes.json" 2>/dev/null || true
+done
+echo "Instance attributes saved in \"$instance_alias_dir/instance_attributes.json\""
+
+
+############################################################
+#
+# Instance Storage Configs (S3/KMS destinations)
+#
+
+instance_storage_types="CALL_RECORDINGS CHAT_TRANSCRIPTS SCHEDULED_REPORTS MEDIA_STREAMS CONTACT_TRACE_RECORDS AGENT_EVENTS REAL_TIME_CONTACT_ANALYSIS_SEGMENTS REAL_TIME_CONTACT_ANALYSIS_CHAT_SEGMENTS ATTACHMENTS CONTACT_EVALUATIONS SCREEN_RECORDINGS"
+
+> "$instance_alias_dir/storage_configs.json"
+for storage_type in $instance_storage_types; do
+    aws_connect list-instance-storage-configs \
+        --instance-id $instance_id \
+        --resource-type $storage_type \
+        --max-items $maxitems \
+        >> "$instance_alias_dir/storage_configs.json" 2>/dev/null || true
+done
+echo "Instance storage configs saved in \"$instance_alias_dir/storage_configs.json\""
+
+
+############################################################
+#
+# User Hierarchy Structure
+#
+
+aws_connect describe-user-hierarchy-structure \
+    --instance-id $instance_id \
+    > "$instance_alias_dir/hierarchy_structure.json" 2>/dev/null || true
+echo "User hierarchy structure saved in \"$instance_alias_dir/hierarchy_structure.json\""
+
+
+############################################################
+#
+# User Hierarchy Groups
+#
+
+aws_connect list-user-hierarchy-groups \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".UserHierarchyGroupSummaryList[]" |
+    jq -s "sort_by(.Name) | .[]" |
+    tee "$instance_alias_dir/hierarchy_groups.json" |
+    echo -e "\n$(jq -s "length") user hierarchy groups listed in \"$instance_alias_dir/hierarchy_groups.json\""
+
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hierarchy_groups.json" |
+    dos2unix |
+    while read hg_id hg_name; do
+        echo "Exporting hierarchy group $hg_name"
+        hg_name_encoded=$(path_encode "$hg_name")
+        aws_connect describe-user-hierarchy-group \
+            --instance-id $instance_id \
+            --hierarchy-group-id $hg_id \
+            > "$instance_alias_dir/hierarchygroup_$hg_name_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No user hierarchy groups found"
+    echo "[]" > "$instance_alias_dir/hierarchy_groups.json"
+fi
+
+
+############################################################
+#
+# Users
+#
+
+aws_connect list-users \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".UserSummaryList[]" |
+    jq -s "sort_by(.Username) | .[]" |
+    tee "$instance_alias_dir/users.json" |
+    echo -e "\n$(jq -s "length") users listed in \"$instance_alias_dir/users.json\""
+
+    jq -r ".Id + \" \" + .Username" "$instance_alias_dir/users.json" |
+    dos2unix |
+    while read user_id user_name; do
+        echo "Exporting user $user_name"
+        user_name_encoded=$(path_encode "$user_name")
+        aws_connect describe-user \
+            --instance-id $instance_id \
+            --user-id $user_id \
+            > "$instance_alias_dir/user_$user_name_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No users found"
+    echo "[]" > "$instance_alias_dir/users.json"
+fi
+
+
+############################################################
+#
+# Authentication Profiles
+#
+
+aws_connect list-authentication-profiles \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".AuthenticationProfileSummaryList[]" |
+    jq -s "sort_by(.Name) | .[]" |
+    tee "$instance_alias_dir/auth_profiles.json" |
+    echo -e "\n$(jq -s "length") authentication profiles listed in \"$instance_alias_dir/auth_profiles.json\""
+
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/auth_profiles.json" |
+    dos2unix |
+    while read ap_id ap_name; do
+        echo "Exporting authentication profile $ap_name"
+        ap_name_encoded=$(path_encode "$ap_name")
+        aws_connect describe-authentication-profile \
+            --instance-id $instance_id \
+            --authentication-profile-id $ap_id \
+            > "$instance_alias_dir/authprofile_$ap_name_encoded.json" 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No authentication profiles found"
+    echo "[]" > "$instance_alias_dir/auth_profiles.json"
+fi
+
+
+############################################################
+#
+# Integration Associations (Lex V2, Wisdom/Amazon Q, Voice ID, Cases)
+#
+
+aws_connect list-integration-associations \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".IntegrationAssociationSummaryList[]" |
+    jq -s "sort_by(.IntegrationAssociationId) | .[]" |
+    tee "$instance_alias_dir/integrations.json" |
+    echo -e "\n$(jq -s "length") integration associations listed in \"$instance_alias_dir/integrations.json\""
+else
+    echo "No integration associations found"
+    echo "[]" > "$instance_alias_dir/integrations.json"
+fi
+
+
+############################################################
+#
+# Approved Origins (CCP embed CORS)
+#
+
+aws_connect list-approved-origins \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".Origins[]" |
+    jq -s "sort | .[]" |
+    tee "$instance_alias_dir/approved_origins.json" |
+    echo -e "\n$(jq -s "length") approved origins listed in \"$instance_alias_dir/approved_origins.json\""
+else
+    echo "No approved origins found"
+    echo "[]" > "$instance_alias_dir/approved_origins.json"
+fi
+
+
+############################################################
+#
+# Security Keys (customer input encryption - informational only)
+#
+
+aws_connect list-security-keys \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".SecurityKeysList[]" |
+    jq -s "sort_by(.AssociationId) | .[]" |
+    tee "$instance_alias_dir/security_keys.json" |
+    echo -e "\n$(jq -s "length") security keys listed in \"$instance_alias_dir/security_keys.json\""
+    echo "WARNING: Security keys cannot be automatically copied - manual re-association required on target instance."
+else
+    echo "No security keys found"
+    echo "[]" > "$instance_alias_dir/security_keys.json"
+fi
+
+
+############################################################
+#
 # Prompts
 #
 
@@ -276,11 +488,11 @@ echo -e "\n$(jq -s "length") prompts listed in \"$instance_alias_dir/prompts.jso
 
 aws_connect list-hours-of-operations \
     --instance-id $instance_id \
-    --max-items $maxitems \
+    --max-items $maxitems |\
+    jq '.HoursOfOperationSummaryList |= map(del(.LastModifiedRegion, .LastModifiedTime))' \
     > $TEMPFILE || error $LINENO
 
 cat $TEMPFILE |
-# jq -r ".HoursOfOperationSummaryList |= sort_by(.Name) | .[][]" |
 jq -r ".HoursOfOperationSummaryList[]$jq_prefix_filter" |
 jq -s "sort_by(.Name) | .[]" |
 tee "$instance_alias_dir/hours.json" |
@@ -293,8 +505,15 @@ while read hour_id hour_name; do
     hour_name_encoded=$(path_encode "$hour_name")
     aws_connect describe-hours-of-operation \
         --instance-id $instance_id \
-        --hours-of-operation-id $hour_id \
+        --hours-of-operation-id $hour_id |\
+        jq 'del(.HoursOfOperation.LastModifiedRegion, .HoursOfOperation.LastModifiedTime)' \
         > "$instance_alias_dir/hour_$hour_name_encoded.json" || error $LINENO
+    # Export hours of operation overrides (schedule exceptions)
+    aws_connect list-hours-of-operation-overrides \
+        --instance-id $instance_id \
+        --hours-of-operation-id $hour_id \
+        --max-items $maxitems \
+        > "$instance_alias_dir/hourOverrides_$hour_name_encoded.json" 2>/dev/null || true
 done
 test $? -eq 0 || error
 
@@ -307,7 +526,8 @@ test $? -eq 0 || error
 aws_connect list-queues \
     --instance-id $instance_id \
     --max-items $maxitems \
-    --queue-types "STANDARD" \
+    --queue-types "STANDARD" |\
+    jq '.QueueSummaryList |= map(del(.LastModifiedRegion, .LastModifiedTime))' \
     > $TEMPFILE || error $LINENO
 
 cat $TEMPFILE |
@@ -323,8 +543,58 @@ while read queue_id queue_name; do
     queue_name_encoded=$(path_encode "$queue_name")
     aws_connect describe-queue \
         --instance-id $instance_id \
-        --queue-id $queue_id \
+        --queue-id $queue_id |\
+        jq 'del(.Queue.LastModifiedRegion, .Queue.LastModifiedTime)' \
         > "$instance_alias_dir/queue_$queue_name_encoded.json" || error $LINENO
+done
+test $? -eq 0 || error
+
+
+############################################################
+#
+# Queue → Quick Connect Associations
+#
+
+jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" |
+dos2unix |
+while read queue_id queue_name; do
+    queue_name_encoded=$(path_encode "$queue_name")
+    aws_connect list-queue-quick-connects \
+        --instance-id $instance_id \
+        --queue-id $queue_id \
+        --max-items $maxitems \
+        > "$instance_alias_dir/queueQCs_$queue_name_encoded.json" 2>/dev/null || true
+done
+test $? -eq 0 || error
+echo "Queue quick connect associations saved"
+
+
+############################################################
+#
+# Quick Connects
+#
+
+aws_connect list-quick-connects \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE || error $LINENO
+
+cat $TEMPFILE |
+jq -r ".QuickConnectSummaryList[]$jq_prefix_filter" |
+jq -s "sort_by(.Name) | .[]" |
+tee "$instance_alias_dir/quickconnects.json" |
+echo -e "\n$(jq -s "length") quick connects listed in \"$instance_alias_dir/quickconnects.json\"$jq_prefix_filter_text"
+
+jq -r ".Id + \" \" + .Name" "$instance_alias_dir/quickconnects.json" |
+dos2unix |
+while read qc_id qc_name; do
+    echo "Exporting quick connect $qc_name"
+    qc_name_encoded=$(path_encode "$qc_name")
+    aws_connect describe-quick-connect \
+        --instance-id $instance_id \
+        --quick-connect-id $qc_id |\
+        jq 'del(.QuickConnect.LastModifiedRegion, .QuickConnect.LastModifiedTime)' \
+        > "$instance_alias_dir/quickconnect_$qc_name_encoded.json" || error $LINENO
 done
 test $? -eq 0 || error
 
@@ -336,7 +606,8 @@ test $? -eq 0 || error
 
 aws_connect list-routing-profiles \
     --instance-id $instance_id \
-    --max-items $maxitems \
+    --max-items $maxitems |\
+    jq '.RoutingProfileSummaryList |= map(del(.LastModifiedRegion, .LastModifiedTime))' \
     > $TEMPFILE || error $LINENO
 
 cat $TEMPFILE |
@@ -353,7 +624,7 @@ while read routing_id routing_name; do
     aws_connect describe-routing-profile \
         --instance-id $instance_id \
         --routing-profile-id $routing_id |
-        jq -r "del(.RoutingProfile.NumberOfAssociatedQueues, .RoutingProfile.NumberOfAssociatedUsers)" \
+        jq -r "del(.RoutingProfile.NumberOfAssociatedQueues, .RoutingProfile.NumberOfAssociatedUsers, .RoutingProfile.LastModifiedRegion, .RoutingProfile.LastModifiedTime)" \
         > "$instance_alias_dir/routing_$routing_name_encoded.json" || error $LINENO
     aws_connect list-routing-profile-queues \
         --instance-id $instance_id \
@@ -362,6 +633,451 @@ while read routing_id routing_name; do
         > "$instance_alias_dir/routingQs_$routing_name_encoded.json" || error $LINENO
 done
 test $? -eq 0 || error
+
+
+############################################################
+#
+# Agent Statuses
+#
+
+aws_connect list-agent-statuses \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE || error $LINENO
+
+cat $TEMPFILE |
+jq -r ".AgentStatusSummaryList[] | select(.Type == \"CUSTOM\")$jq_prefix_filter" |
+jq -s "sort_by(.Name) | .[]" |
+tee "$instance_alias_dir/agentstatuses.json" |
+echo -e "\n$(jq -s "length") agent statuses listed in \"$instance_alias_dir/agentstatuses.json\"$jq_prefix_filter_text"
+
+jq -r ".Id + \" \" + .Name" "$instance_alias_dir/agentstatuses.json" |
+dos2unix |
+while read as_id as_name; do
+    echo "Exporting agent status $as_name"
+    as_name_encoded=$(path_encode "$as_name")
+    aws_connect describe-agent-status \
+        --instance-id $instance_id \
+        --agent-status-id $as_id \
+        > "$instance_alias_dir/agentstatus_$as_name_encoded.json" || error $LINENO
+done
+test $? -eq 0 || error
+
+
+############################################################
+#
+# Security Profiles
+#
+
+aws_connect list-security-profiles \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE || error $LINENO
+
+cat $TEMPFILE |
+jq -r ".SecurityProfileSummaryList[]$jq_prefix_filter" |
+jq -s "sort_by(.Name) | .[]" |
+tee "$instance_alias_dir/securityprofiles.json" |
+echo -e "\n$(jq -s "length") security profiles listed in \"$instance_alias_dir/securityprofiles.json\"$jq_prefix_filter_text"
+
+jq -r ".Id + \" \" + .Name" "$instance_alias_dir/securityprofiles.json" |
+dos2unix |
+while read sp_id sp_name; do
+    echo "Exporting security profile $sp_name"
+    sp_name_encoded=$(path_encode "$sp_name")
+    aws_connect describe-security-profile \
+        --instance-id $instance_id \
+        --security-profile-id $sp_id \
+        > "$instance_alias_dir/securityprofile_$sp_name_encoded.json" || error $LINENO
+    aws_connect list-security-profile-permissions \
+        --instance-id $instance_id \
+        --security-profile-id $sp_id \
+        --max-items $maxitems \
+        > "$instance_alias_dir/securityprofilePerms_$sp_name_encoded.json" || error $LINENO
+done
+test $? -eq 0 || error
+
+
+############################################################
+#
+# Predefined Attributes
+#
+
+aws_connect list-predefined-attributes \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".PredefinedAttributeSummaryList[]" |
+    jq -s "sort_by(.Name) | .[]" |
+    tee "$instance_alias_dir/predefinedattributes.json" |
+    echo -e "\n$(jq -s "length") predefined attributes listed in \"$instance_alias_dir/predefinedattributes.json\""
+
+    jq -r ".Name" "$instance_alias_dir/predefinedattributes.json" |
+    dos2unix |
+    while read pa_name; do
+        echo "Exporting predefined attribute $pa_name"
+        pa_name_encoded=$(path_encode "$pa_name")
+        aws_connect describe-predefined-attribute \
+            --instance-id $instance_id \
+            --name "$pa_name" \
+            > "$instance_alias_dir/predefinedattribute_$pa_name_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No predefined attributes found"
+    echo "[]" > "$instance_alias_dir/predefinedattributes.json"
+fi
+
+
+############################################################
+#
+# Task Templates
+#
+
+aws_connect list-task-templates \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".TaskTemplates[]$jq_prefix_filter" |
+    jq -s "sort_by(.Name) | .[]" |
+    tee "$instance_alias_dir/tasktemplates.json" |
+    echo -e "\n$(jq -s "length") task templates listed in \"$instance_alias_dir/tasktemplates.json\"$jq_prefix_filter_text"
+
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/tasktemplates.json" |
+    dos2unix |
+    while read tt_id tt_name; do
+        echo "Exporting task template $tt_name"
+        tt_name_encoded=$(path_encode "$tt_name")
+        aws_connect get-task-template \
+            --instance-id $instance_id \
+            --task-template-id $tt_id \
+            > "$instance_alias_dir/tasktemplate_$tt_name_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No task templates found"
+    echo "[]" > "$instance_alias_dir/tasktemplates.json"
+fi
+
+
+############################################################
+#
+# Evaluation Forms (Quality Management)
+#
+
+aws_connect list-evaluation-forms \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".EvaluationFormSummaryList[]$jq_prefix_filter" |
+    jq -s "sort_by(.Title) | .[]" |
+    tee "$instance_alias_dir/evaluationforms.json" |
+    echo -e "\n$(jq -s "length") evaluation forms listed in \"$instance_alias_dir/evaluationforms.json\"$jq_prefix_filter_text"
+
+    jq -r ".EvaluationFormId + \" \" + .Title" "$instance_alias_dir/evaluationforms.json" |
+    dos2unix |
+    while read ef_id ef_title; do
+        echo "Exporting evaluation form $ef_title"
+        ef_title_encoded=$(path_encode "$ef_title")
+        aws_connect describe-evaluation-form \
+            --instance-id $instance_id \
+            --evaluation-form-id $ef_id \
+            > "$instance_alias_dir/evaluationform_$ef_title_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No evaluation forms found"
+    echo "[]" > "$instance_alias_dir/evaluationforms.json"
+fi
+
+
+############################################################
+#
+# Rules (Contact Lens automation rules)
+#
+
+aws_connect list-rules \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".RuleSummaryList[]$jq_prefix_filter" |
+    jq -s "sort_by(.Name) | .[]" |
+    tee "$instance_alias_dir/rules.json" |
+    echo -e "\n$(jq -s "length") rules listed in \"$instance_alias_dir/rules.json\"$jq_prefix_filter_text"
+
+    jq -r ".RuleId + \" \" + .Name" "$instance_alias_dir/rules.json" |
+    dos2unix |
+    while read rule_id rule_name; do
+        echo "Exporting rule $rule_name"
+        rule_name_encoded=$(path_encode "$rule_name")
+        aws_connect describe-rule \
+            --instance-id $instance_id \
+            --rule-id $rule_id \
+            > "$instance_alias_dir/rule_$rule_name_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No rules found"
+    echo "[]" > "$instance_alias_dir/rules.json"
+fi
+
+
+############################################################
+#
+# Views (Agent Workspace)
+#
+
+aws_connect list-views \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".ViewsSummaryList[]$jq_prefix_filter" |
+    jq -s "sort_by(.Name) | .[]" |
+    tee "$instance_alias_dir/views.json" |
+    echo -e "\n$(jq -s "length") views listed in \"$instance_alias_dir/views.json\"$jq_prefix_filter_text"
+
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/views.json" |
+    dos2unix |
+    while read view_id view_name; do
+        echo "Exporting view $view_name"
+        view_name_encoded=$(path_encode "$view_name")
+        aws_connect describe-view \
+            --instance-id $instance_id \
+            --view-id $view_id \
+            > "$instance_alias_dir/view_$view_name_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No views found"
+    echo "[]" > "$instance_alias_dir/views.json"
+fi
+
+
+############################################################
+#
+# Vocabularies (custom vocabulary for Contact Lens transcription)
+#
+
+aws_connect list-default-vocabularies \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".DefaultVocabularyList[]" |
+    jq -s "sort_by(.VocabularyName) | .[]" |
+    tee "$instance_alias_dir/vocabularies.json" |
+    echo -e "\n$(jq -s "length") vocabularies listed in \"$instance_alias_dir/vocabularies.json\""
+
+    jq -r ".VocabularyId + \" \" + .VocabularyName" "$instance_alias_dir/vocabularies.json" |
+    dos2unix |
+    while read vocab_id vocab_name; do
+        echo "Exporting vocabulary content $vocab_name"
+        vocab_name_encoded=$(path_encode "$vocab_name")
+        aws_connect describe-vocabulary \
+            --instance-id $instance_id \
+            --vocabulary-id $vocab_id \
+            > "$instance_alias_dir/vocabulary_$vocab_name_encoded.json" 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No vocabularies found"
+    echo "[]" > "$instance_alias_dir/vocabularies.json"
+fi
+
+
+############################################################
+#
+# Data Tables (flow lookup tables)
+#
+
+aws_connect list-data-tables \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".DataTableSummaryList[]" |
+    jq -s "sort_by(.TableName) | .[]" |
+    tee "$instance_alias_dir/datatables.json" |
+    echo -e "\n$(jq -s "length") data tables listed in \"$instance_alias_dir/datatables.json\""
+
+    jq -r ".TableId + \" \" + .TableName" "$instance_alias_dir/datatables.json" |
+    dos2unix |
+    while read dt_id dt_name; do
+        echo "Exporting data table $dt_name"
+        dt_name_encoded=$(path_encode "$dt_name")
+        aws_connect describe-data-table \
+            --instance-id $instance_id \
+            --table-id $dt_id \
+            > "$instance_alias_dir/datatable_$dt_name_encoded.json" 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No data tables found"
+    echo "[]" > "$instance_alias_dir/datatables.json"
+fi
+
+
+############################################################
+#
+# Email Addresses (email channel - informational, domain verification required)
+#
+
+aws_connect search-email-addresses \
+    --instance-id $instance_id \
+    --max-results 100 \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".EmailAddresses[]" |
+    jq -s "sort_by(.EmailAddress) | .[]" |
+    tee "$instance_alias_dir/email_addresses.json" |
+    echo -e "\n$(jq -s "length") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
+    echo "WARNING: Email addresses require domain verification on target instance - manual setup required."
+
+    jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" |
+    dos2unix |
+    while read ea_id ea_address; do
+        echo "Exporting email address $ea_address"
+        ea_encoded=$(path_encode "$ea_address")
+        aws_connect describe-email-address \
+            --instance-id $instance_id \
+            --email-address-id $ea_id \
+            > "$instance_alias_dir/emailaddress_$ea_encoded.json" 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No email addresses found"
+    echo "[]" > "$instance_alias_dir/email_addresses.json"
+fi
+
+
+############################################################
+#
+# Phone Numbers (claimed numbers with flow associations)
+#
+
+aws_connect list-phone-numbers-v2 \
+    --instance-id $instance_id \
+    --max-items $maxitems \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".ListPhoneNumbersSummaryList[]" |
+    jq -s "sort_by(.PhoneNumber) | .[]" |
+    tee "$instance_alias_dir/phonenumbers.json" |
+    echo -e "\n$(jq -s "length") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
+
+    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" |
+    dos2unix |
+    while read pn_id pn_number; do
+        echo "Exporting phone number $pn_number"
+        pn_encoded=$(path_encode "$pn_number")
+        aws_connect describe-phone-number \
+            --phone-number-id $pn_id \
+            > "$instance_alias_dir/phonenumber_$pn_encoded.json" || error $LINENO
+    done
+    test $? -eq 0 || error
+else
+    echo "No phone numbers found"
+    echo "[]" > "$instance_alias_dir/phonenumbers.json"
+fi
+
+
+############################################################
+#
+# Amazon Connect Cases (separate CLI namespace)
+#
+
+aws connectcases list-domains \
+    --max-results 100 \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".domains[]" |
+    jq -s "sort_by(.name) | .[]" |
+    tee "$instance_alias_dir/cases_domains.json" |
+    echo -e "\n$(jq -s "length") Cases domains listed in \"$instance_alias_dir/cases_domains.json\""
+
+    jq -r ".domainId + \" \" + .name" "$instance_alias_dir/cases_domains.json" |
+    dos2unix |
+    while read domain_id domain_name; do
+        echo "Exporting Cases domain $domain_name"
+        domain_name_encoded=$(path_encode "$domain_name")
+        # Fields
+        aws connectcases list-fields \
+            --domain-id $domain_id \
+            --max-results 100 \
+            > "$instance_alias_dir/cases_fields_$domain_name_encoded.json" 2>/dev/null || true
+        # Layouts
+        aws connectcases list-layouts \
+            --domain-id $domain_id \
+            --max-results 100 \
+            > "$instance_alias_dir/cases_layouts_$domain_name_encoded.json" 2>/dev/null || true
+        # Templates
+        aws connectcases list-templates \
+            --domain-id $domain_id \
+            --max-results 100 \
+            > "$instance_alias_dir/cases_templates_$domain_name_encoded.json" 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No Connect Cases domains found"
+    echo "[]" > "$instance_alias_dir/cases_domains.json"
+fi
+
+
+############################################################
+#
+# Outbound Campaigns V2 (separate CLI namespace)
+#
+
+aws connect-campaigns-v2 list-campaigns \
+    --max-results 100 \
+    > $TEMPFILE 2>/dev/null || true
+
+if [ -s $TEMPFILE ]; then
+    cat $TEMPFILE |
+    jq -r ".campaignSummaryList[]" |
+    jq -s "sort_by(.name) | .[]" |
+    tee "$instance_alias_dir/campaigns.json" |
+    echo -e "\n$(jq -s "length") outbound campaigns listed in \"$instance_alias_dir/campaigns.json\""
+
+    jq -r ".id + \" \" + .name" "$instance_alias_dir/campaigns.json" |
+    dos2unix |
+    while read camp_id camp_name; do
+        echo "Exporting campaign $camp_name"
+        camp_name_encoded=$(path_encode "$camp_name")
+        aws connect-campaigns-v2 describe-campaign \
+            --id $camp_id \
+            > "$instance_alias_dir/campaign_$camp_name_encoded.json" 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No outbound campaigns found"
+    echo "[]" > "$instance_alias_dir/campaigns.json"
+fi
 
 
 ############################################################
@@ -395,7 +1111,7 @@ while read module_id module_name; do
     aws_connect describe-contact-flow-module \
         --instance-id $instance_id \
         --contact-flow-module-id $module_id > $TEMPCF \
-	    || error $LINENO "$module_name" "$instance_alias_dir/modules.json"
+        || error $LINENO "$module_name" "$instance_alias_dir/modules.json"
     if [ -s $TEMPCF ]; then
         # Status == "saved" is considered a failure,
         # not to copy an unpublished contact flow module
@@ -447,7 +1163,6 @@ while read flow_id flow_name; do
         --instance-id $instance_id \
         --contact-flow-id $flow_id > $TEMPCF \
         2> /dev/null
-    #     || error $LINENO "$flow_name" "$instance_alias_dir/flows.json"
     # AWS CLI seems not returning error for unpublished
     # Need to check for an empty $TEMPCF
     flow_name_encoded=$(path_encode "$flow_name")
@@ -463,6 +1178,161 @@ while read flow_id flow_name; do
     fi
 done
 test $? -eq 0 || error
+
+############################################################
+#
+# External Dependencies Manifest
+# Scan all flows and modules for Lambda, Lex V2, and Lex Classic references
+#
+
+echo
+echo "Building external dependencies manifest..."
+
+manifest_file="$instance_alias_dir/external_dependencies.json"
+
+# Collect all flow and module JSON files
+all_flow_files=$(ls "$instance_alias_dir"/flow_*.json "$instance_alias_dir"/module_*.json 2>/dev/null)
+
+# Lambda ARNs
+lambda_arns=$(echo "$all_flow_files" | xargs -I{} sh -c '[ -f "{}" ] && cat "{}"' 2>/dev/null |
+    jq -r '.. | strings | select(startswith("arn:aws:lambda:"))' 2>/dev/null |
+    sort -u)
+
+# Lex V2 bot ARNs (arn:aws:lex:...)
+lex_v2_arns=$(echo "$all_flow_files" | xargs -I{} sh -c '[ -f "{}" ] && cat "{}"' 2>/dev/null |
+    jq -r '.. | strings | select(startswith("arn:aws:lex:"))' 2>/dev/null |
+    sort -u)
+
+# Lex Classic bot names (from ConnectParticipantWithLexBot action type)
+lex_classic_bots=$(echo "$all_flow_files" | xargs -I{} sh -c '[ -f "{}" ] && cat "{}"' 2>/dev/null |
+    jq -r '.Actions[]? | select(.Type == "ConnectParticipantWithLexBot") | .Parameters.LexBot | select(. != null) | .Name + " " + .Region' 2>/dev/null |
+    sort -u)
+
+# Build JSON manifest
+{
+    echo "{"
+    echo "  \"GeneratedAt\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+    echo "  \"InstanceAlias\": \"$instance_alias\","
+    echo "  \"InstanceId\": \"$instance_id\","
+
+    # Lambda functions
+    echo "  \"LambdaFunctions\": ["
+    first=1
+    while IFS= read -r arn; do
+        [ -z "$arn" ] && continue
+        func_name="${arn##*:function:}"
+        func_name="${func_name%%:*}"
+        runtime=""
+        description=""
+        handler=""
+        # Try to get function config - non-fatal
+        func_config=$(aws lambda get-function-configuration \
+            $profile_flag \
+            --function-name "$arn" \
+            2>/dev/null)
+        if [ -n "$func_config" ]; then
+            runtime=$(echo "$func_config" | jq -r '.Runtime // ""')
+            description=$(echo "$func_config" | jq -r '.Description // ""')
+            handler=$(echo "$func_config" | jq -r '.Handler // ""')
+            memory=$(echo "$func_config" | jq -r '.MemorySize // ""')
+            timeout=$(echo "$func_config" | jq -r '.Timeout // ""')
+        fi
+        [ "$first" -eq 0 ] && echo "  ,"
+        first=0
+        cat <<JSONEOF
+    {
+      "Arn": "$arn",
+      "FunctionName": "$func_name",
+      "Runtime": "$runtime",
+      "Handler": "$handler",
+      "Description": "$description",
+      "MemorySize": $( [ -n "$memory" ] && echo "$memory" || echo "null" ),
+      "Timeout": $( [ -n "$timeout" ] && echo "$timeout" || echo "null" )
+    }
+JSONEOF
+    done <<< "$lambda_arns"
+    echo "  ],"
+
+    # Lex V2 bots
+    echo "  \"LexV2Bots\": ["
+    first=1
+    while IFS= read -r arn; do
+        [ -z "$arn" ] && continue
+        # ARN format: arn:aws:lex:region:account:bot-alias/BOT_ID/ALIAS_ID
+        bot_id=$(echo "$arn" | sed 's|.*bot-alias/\([^/]*\)/.*|\1|')
+        alias_id=$(echo "$arn" | sed 's|.*bot-alias/[^/]*/\(.*\)|\1|')
+        bot_name=""
+        alias_name=""
+        bot_locale=""
+        bot_config=$(aws lexv2-models describe-bot \
+            $profile_flag \
+            --bot-id "$bot_id" \
+            2>/dev/null)
+        if [ -n "$bot_config" ]; then
+            bot_name=$(echo "$bot_config" | jq -r '.botName // ""')
+        fi
+        alias_config=$(aws lexv2-models describe-bot-alias \
+            $profile_flag \
+            --bot-id "$bot_id" \
+            --bot-alias-id "$alias_id" \
+            2>/dev/null)
+        if [ -n "$alias_config" ]; then
+            alias_name=$(echo "$alias_config" | jq -r '.botAliasName // ""')
+            bot_locale=$(echo "$alias_config" | jq -r '.botAliasLocaleSettings | keys | join(",")' 2>/dev/null || echo "")
+        fi
+        [ "$first" -eq 0 ] && echo "  ,"
+        first=0
+        cat <<JSONEOF
+    {
+      "Arn": "$arn",
+      "BotId": "$bot_id",
+      "BotName": "$bot_name",
+      "AliasId": "$alias_id",
+      "AliasName": "$alias_name",
+      "Locales": "$bot_locale"
+    }
+JSONEOF
+    done <<< "$lex_v2_arns"
+    echo "  ],"
+
+    # Lex Classic bots
+    echo "  \"LexClassicBots\": ["
+    first=1
+    while IFS= read -r bot_entry; do
+        [ -z "$bot_entry" ] && continue
+        bot_name="${bot_entry%% *}"
+        bot_region="${bot_entry##* }"
+        bot_version=""
+        bot_config=$(aws lex-models get-bot \
+            $profile_flag \
+            --name "$bot_name" \
+            --version-or-alias '$LATEST' \
+            2>/dev/null)
+        if [ -n "$bot_config" ]; then
+            bot_version=$(echo "$bot_config" | jq -r '.version // ""')
+        fi
+        [ "$first" -eq 0 ] && echo "  ,"
+        first=0
+        cat <<JSONEOF
+    {
+      "Name": "$bot_name",
+      "Region": "$bot_region",
+      "Version": "$bot_version"
+    }
+JSONEOF
+    done <<< "$lex_classic_bots"
+    echo "  ]"
+
+    echo "}"
+} > "$manifest_file"
+
+lambda_count=$(jq ".LambdaFunctions | length" "$manifest_file" 2>/dev/null || echo 0)
+lex_v2_count=$(jq ".LexV2Bots | length" "$manifest_file" 2>/dev/null || echo 0)
+lex_classic_count=$(jq ".LexClassicBots | length" "$manifest_file" 2>/dev/null || echo 0)
+echo "External dependencies manifest saved: $manifest_file"
+echo "  Lambda functions : $lambda_count"
+echo "  Lex V2 bots      : $lex_v2_count"
+echo "  Lex Classic bots : $lex_classic_count"
 
 echo
 echo "All done"

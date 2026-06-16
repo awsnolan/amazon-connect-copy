@@ -5,7 +5,7 @@
 # Copy Amazon Connect instance A to instance B safely
 #
 
-VERSION=1.3.5
+VERSION=1.5.0
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 AWS_CLI_MAX_QUEUE_CONFIGS=10
@@ -286,6 +286,674 @@ fi
 
 ############################################################
 #
+# Pre-flight: External Dependencies Check
+#
+
+cat <<EOD
+
+Pre-flight Check: External Dependencies
+----------------------------------------
+EOD
+
+manifest_file="$instance_alias_dir_a/external_dependencies.json"
+preflight_warnings=0
+preflight_missing=0
+
+if [ ! -f "$manifest_file" ]; then
+    echo "WARNING: external_dependencies.json not found in $instance_alias_dir_a"
+    echo "         Run connect_save >= 1.5.0 to generate it."
+    echo "         Skipping pre-flight check - continuing anyway."
+else
+    echo "Checking dependencies from: $manifest_file"
+    echo
+
+    # --- Lambda functions ---
+    lambda_count=$(jq ".LambdaFunctions | length" "$manifest_file" 2>/dev/null || echo 0)
+    if [ "$lambda_count" -gt 0 ]; then
+        echo "Lambda Functions ($lambda_count):"
+        jq -r ".LambdaFunctions[] | .Arn" "$manifest_file" | dos2unix |
+        while read lambda_arn; do
+            # Remap ARN prefix for target account/region
+            lambda_arn_b=$(echo "$lambda_arn" | sed -f "$helper_sed")
+            func_name="${lambda_arn_b##*:function:}"
+            func_name="${func_name%%:*}"
+            exists=$(aws lambda get-function \
+                $profile_flag \
+                --function-name "$lambda_arn_b" \
+                2>/dev/null | jq -r '.Configuration.FunctionName // empty')
+            if [ -n "$exists" ]; then
+                echo "  ✓ $func_name"
+            else
+                echo "  ✗ MISSING: $func_name"
+                echo "    Source ARN : $lambda_arn"
+                echo "    Target ARN : $lambda_arn_b"
+                preflight_missing=$((preflight_missing + 1))
+            fi
+        done
+        echo
+    fi
+
+    # --- Lex V2 bots ---
+    lexv2_count=$(jq ".LexV2Bots | length" "$manifest_file" 2>/dev/null || echo 0)
+    if [ "$lexv2_count" -gt 0 ]; then
+        echo "Lex V2 Bots ($lexv2_count):"
+        jq -r ".LexV2Bots[] | .BotId + \" \" + .BotName + \" \" + .AliasId" "$manifest_file" | dos2unix |
+        while read bot_id bot_name alias_id; do
+            # Remap bot ARN
+            bot_arn_a="arn:aws:lex:$region_a:$aws_ac_a:bot-alias/$bot_id/$alias_id"
+            bot_arn_b=$(echo "$bot_arn_a" | sed -f "$helper_sed")
+            bot_id_b=$(echo "$bot_arn_b" | sed 's|.*bot-alias/\([^/]*\)/.*|\1|')
+            alias_id_b=$(echo "$bot_arn_b" | sed 's|.*bot-alias/[^/]*/\(.*\)|\1|')
+            exists=$(aws lexv2-models describe-bot \
+                $profile_flag \
+                --bot-id "$bot_id_b" \
+                2>/dev/null | jq -r '.botName // empty')
+            if [ -n "$exists" ]; then
+                echo "  ✓ $bot_name (id=$bot_id_b)"
+            else
+                echo "  ✗ MISSING: $bot_name"
+                echo "    Source bot-id : $bot_id / alias: $alias_id"
+                echo "    Target bot-id : $bot_id_b / alias: $alias_id_b"
+                preflight_missing=$((preflight_missing + 1))
+            fi
+        done
+        echo
+    fi
+
+    # --- Lex Classic bots ---
+    lex_classic_count=$(jq ".LexClassicBots | length" "$manifest_file" 2>/dev/null || echo 0)
+    if [ "$lex_classic_count" -gt 0 ]; then
+        echo "Lex Classic Bots ($lex_classic_count):"
+        jq -r ".LexClassicBots[] | .Name + \" \" + .Region" "$manifest_file" | dos2unix |
+        while read bot_name bot_region; do
+            # Remap region if cross-region copy
+            bot_region_b="${bot_region/$region_a/$region_b}"
+            # Apply lex bot prefix remapping if set
+            bot_name_b="$bot_name"
+            if [ -n "$lex_bot_prefix_a" ] && [ -n "$lex_bot_prefix_b" ]; then
+                bot_name_b="${bot_name/#$lex_bot_prefix_a/$lex_bot_prefix_b}"
+            fi
+            exists=$(aws lex-models get-bot \
+                $profile_flag \
+                --name "$bot_name_b" \
+                --version-or-alias '$LATEST' \
+                2>/dev/null | jq -r '.name // empty')
+            if [ -n "$exists" ]; then
+                echo "  ✓ $bot_name_b (region=$bot_region_b)"
+            else
+                echo "  ✗ MISSING: $bot_name_b (region=$bot_region_b)"
+                preflight_missing=$((preflight_missing + 1))
+            fi
+        done
+        echo
+    fi
+
+    if [ "$preflight_missing" -gt 0 ]; then
+        echo "WARNING: $preflight_missing external dependency(s) not found on target account."
+        echo "         Contact flows referencing missing resources may fail after copy."
+        echo "         Deploy missing Lambda functions and Lex bots before going live."
+        echo "         Continuing with copy regardless..."
+    else
+        echo "All external dependencies verified on target account."
+    fi
+fi
+
+echo
+
+############################################################
+#
+# Instance Attributes (feature flags)
+#
+
+cat <<EOD
+
+Instance Attributes
+-------------------
+EOD
+if [ -f "$instance_alias_dir_a/instance_attributes.json" ]; then
+    echo "Applying instance attributes from source to target"
+    # Each line in the file is a separate JSON object with Attribute.AttributeType and Attribute.Value
+    jq -r ".Attribute | .AttributeType + \" \" + .Value" "$instance_alias_dir_a/instance_attributes.json" 2>/dev/null |
+    dos2unix |
+    while read attr_type attr_value; do
+        [ -z "$attr_type" ] && continue
+        echo "  Setting $attr_type = $attr_value"
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update instance attribute: $attr_type = $attr_value
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update instance attribute $attr_type = $attr_value
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-instance-attribute \
+--instance-id $instance_id_b \
+--attribute-type $attr_type \
+--value $attr_value
+EOD
+            continue
+        fi
+        aws_connect update-instance-attribute \
+            --instance-id $instance_id_b \
+            --attribute-type $attr_type \
+            --value $attr_value 2>/dev/null || true
+    done
+    test $? -eq 0 || error
+else
+    echo "No instance attributes file found (skipping)"
+fi
+
+
+############################################################
+#
+# Instance Storage Configs
+#
+
+cat <<EOD
+
+Instance Storage Configs
+------------------------
+EOD
+if [ -f "$instance_alias_dir_a/storage_configs.json" ]; then
+    echo "NOTE: Instance storage configs reference S3 buckets and KMS keys."
+    echo "      Verify S3 buckets and KMS keys exist on target account before applying."
+    echo "      Saved in $instance_alias_dir_a/storage_configs.json for manual review."
+else
+    echo "No instance storage configs file found (skipping)"
+fi
+
+
+############################################################
+#
+# User Hierarchy Structure
+#
+
+cat <<EOD
+
+User Hierarchy Structure
+------------------------
+EOD
+if [ -f "$instance_alias_dir_a/hierarchy_structure.json" ]; then
+    hg_struct=$(jq -r ".HierarchyStructure" "$instance_alias_dir_a/hierarchy_structure.json" 2>/dev/null)
+    if [ -n "$hg_struct" ] && [ "$hg_struct" != "null" ]; then
+        echo "Applying user hierarchy structure"
+        cat "$instance_alias_dir_a/hierarchy_structure.json" |
+        jq ".HierarchyStructure | {HierarchyStructure: .}" |
+        sed -f "$helper_sed" > "$helper/hierarchy_structure.json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update user hierarchy structure
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update user hierarchy structure
+$(cat "$helper/hierarchy_structure.json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-user-hierarchy-structure \
+--instance-id $instance_id_b \
+--hierarchy-structure "file://$helper/hierarchy_structure.json"
+EOD
+        else
+            aws_connect update-user-hierarchy-structure \
+                --instance-id $instance_id_b \
+                --hierarchy-structure "$(jq -r '.HierarchyStructure' "$helper/hierarchy_structure.json")" 2>/dev/null || true
+        fi
+    else
+        echo "No hierarchy structure defined"
+    fi
+else
+    echo "No hierarchy structure file found (skipping)"
+fi
+
+
+############################################################
+#
+# User Hierarchy Groups
+#
+
+cat <<EOD
+
+User Hierarchy Groups
+---------------------
+EOD
+if [ -s "$instance_alias_dir_a/hierarchy_groups.json" ]; then
+    # Process level by level (LevelId 1 first, then children)
+    echo "Creating/updating user hierarchy groups (level order)"
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/hierarchy_groups.json" |
+    dos2unix |
+    while read hg_id_a hg_name; do
+        hg_name_encoded=$(path_encode "$hg_name")
+        hg_file="$instance_alias_dir_a/hierarchygroup_$hg_name_encoded.json"
+        [ -f "$hg_file" ] || continue
+
+        hg_id_b=$(jq -r ".HierarchyGroup.HierarchyGroupId" "$instance_alias_dir_b/hierarchygroup_$hg_name_encoded.json" 2>/dev/null | dos2unix)
+        hg_level=$(jq -r ".HierarchyGroup.LevelId" "$hg_file" | dos2unix)
+        hg_parent_id_a=$(jq -r ".HierarchyGroup.HierarchyPath | to_entries | last | .value.Id // empty" "$hg_file" 2>/dev/null | dos2unix)
+
+        if [ -z "$hg_id_b" ] || [ "$hg_id_b" = "null" ]; then
+            echo "Creating hierarchy group $hg_name"
+            cat <<EOD >> "$helper_log"
+
+$actionLead Create user hierarchy group: $hg_name
+EOD
+            if [ -n "$dryrun" ]; then
+                cat <<EOD
+Dry-create hierarchy group $hg_name (level $hg_level)
+
+EOD
+                cat <<EOD >> "$helper_log"
+aws connect create-user-hierarchy-group \
+--instance-id $instance_id_b \
+--name "${hg_name//\"/\\\"}"
+EOD
+            else
+                create_args="--instance-id $instance_id_b --name \"${hg_name//\"/\\\"}\""
+                # Substitute parent ID if present
+                if [ -n "$hg_parent_id_a" ]; then
+                    hg_parent_id_b=$(sed -n "s%$hg_parent_id_a%&%p" "$helper_sed" 2>/dev/null | head -1)
+                    hg_parent_id_b=$(sed -f "$helper_sed" <<< "$hg_parent_id_a" 2>/dev/null)
+                    [ -n "$hg_parent_id_b" ] && create_args="$create_args --parent-group-id $hg_parent_id_b"
+                fi
+                aws_connect create-user-hierarchy-group \
+                    --instance-id $instance_id_b \
+                    --name "${hg_name//\"/\\\"}" \
+                    > "$helper/output_hierarchygroup_$hg_name_encoded.json" 2>/dev/null || true
+                hg_id_b=$(jq -r ".HierarchyGroupId" "$helper/output_hierarchygroup_$hg_name_encoded.json" 2>/dev/null | dos2unix)
+                if [ -n "$hg_id_b" ] && [ "$hg_id_b" != "null" ]; then
+                    cat <<EOD >> "$helper_sed"
+# Hierarchy Group: $hg_name
+s%$hg_id_a%$hg_id_b%g
+EOD
+                fi
+            fi
+        else
+            echo "Hierarchy group $hg_name already exists"
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No user hierarchy groups to process"
+fi
+
+
+############################################################
+#
+# Users
+#
+
+cat <<EOD
+
+Users
+-----
+EOD
+if [ -s "$instance_alias_dir_a/users.json" ]; then
+    echo "NOTE: Users reference routing profiles and security profiles."
+    echo "      Ensure those are copied first. Passwords are not copied."
+    jq -r ".Id + \" \" + .Username" "$instance_alias_dir_a/users.json" |
+    dos2unix |
+    while read user_id_a user_name; do
+        user_name_encoded=$(path_encode "$user_name")
+        user_file="$instance_alias_dir_a/user_$user_name_encoded.json"
+        [ -f "$user_file" ] || continue
+
+        user_id_b=$(jq -r ".User.Id" "$instance_alias_dir_b/user_$user_name_encoded.json" 2>/dev/null | dos2unix)
+        if [ -z "$user_id_b" ] || [ "$user_id_b" = "null" ]; then
+            echo "Creating user $user_name"
+            cat "$user_file" |
+            jq --arg iid $instance_id_b \
+                ".User | del(.Id, .Arn, .DirectoryUserId, .LastModifiedTime, .LastModifiedRegion) | . + { InstanceId: \$iid }" |
+            sed -f "$helper_sed" > "$helper/user_$user_name_encoded.json"
+
+            cat <<EOD >> "$helper_log"
+
+$actionLead Create user: $user_name
+EOD
+            if [ -n "$dryrun" ]; then
+                cat <<EOD
+Dry-create user $user_name
+
+EOD
+                cat <<EOD >> "$helper_log"
+aws connect create-user \
+--cli-input-json "file://$helper/user_$user_name_encoded.json" \
+> "$helper/output_user_$user_name_encoded.json"
+EOD
+            else
+                aws_connect create-user \
+                    --cli-input-json "file://$helper/user_$user_name_encoded.json" \
+                    > "$helper/output_user_$user_name_encoded.json" 2>/dev/null || true
+                user_id_b=$(jq -r ".UserId" "$helper/output_user_$user_name_encoded.json" 2>/dev/null | dos2unix)
+                if [ -n "$user_id_b" ] && [ "$user_id_b" != "null" ]; then
+                    cat <<EOD >> "$helper_sed"
+# User: $user_name
+s%$user_id_a%$user_id_b%g
+EOD
+                fi
+            fi
+        else
+            echo "User $user_name already exists"
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No users to process"
+fi
+
+
+############################################################
+#
+# Authentication Profiles
+#
+
+cat <<EOD
+
+Authentication Profiles
+-----------------------
+EOD
+if [ -s "$instance_alias_dir_a/auth_profiles.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/auth_profiles.json" |
+    dos2unix |
+    while read ap_id_a ap_name; do
+        ap_name_encoded=$(path_encode "$ap_name")
+        ap_file="$instance_alias_dir_a/authprofile_$ap_name_encoded.json"
+        [ -f "$ap_file" ] || continue
+
+        ap_id_b=$(jq -r ".AuthenticationProfile.Id" "$instance_alias_dir_b/authprofile_$ap_name_encoded.json" 2>/dev/null | dos2unix)
+        if [ -n "$ap_id_b" ] && [ "$ap_id_b" != "null" ]; then
+            echo "Updating authentication profile $ap_name"
+            cat <<EOD >> "$helper_log"
+
+$actionLead Update authentication profile: $ap_name
+EOD
+            if [ -n "$dryrun" ]; then
+                cat <<EOD
+Dry-update authentication profile $ap_name
+
+EOD
+                cat <<EOD >> "$helper_log"
+aws connect update-authentication-profile \
+--instance-id $instance_id_b \
+--authentication-profile-id $ap_id_b
+EOD
+            else
+                aws_connect update-authentication-profile \
+                    --instance-id $instance_id_b \
+                    --authentication-profile-id $ap_id_b \
+                    --name "${ap_name//\"/\\\"}" 2>/dev/null || true
+            fi
+        else
+            echo "Authentication profile $ap_name not found on target (may be auto-created by instance)"
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No authentication profiles to process"
+fi
+
+
+############################################################
+#
+# Integration Associations
+#
+
+cat <<EOD
+
+Integration Associations
+------------------------
+EOD
+if [ -s "$instance_alias_dir_a/integrations.json" ]; then
+    echo "NOTE: Integration associations reference external systems."
+    echo "      Verify Lex V2 bots, Wisdom/Amazon Q, Voice ID, and Cases resources"
+    echo "      exist on the target account before applying."
+    echo "      Saved in $instance_alias_dir_a/integrations.json for manual review."
+    jq -r ".IntegrationAssociationId + \" \" + .IntegrationType" "$instance_alias_dir_a/integrations.json" |
+    dos2unix |
+    while read ia_id ia_type; do
+        echo "  Integration: $ia_type (id=$ia_id) - manual verification required"
+    done
+else
+    echo "No integration associations to process"
+fi
+
+
+############################################################
+#
+# Approved Origins
+#
+
+cat <<EOD
+
+Approved Origins
+----------------
+EOD
+if [ -s "$instance_alias_dir_a/approved_origins.json" ]; then
+    jq -r "." "$instance_alias_dir_a/approved_origins.json" |
+    dos2unix |
+    while read origin; do
+        [ -z "$origin" ] && continue
+        echo "Associating approved origin: $origin"
+        cat <<EOD >> "$helper_log"
+
+$actionLead Associate approved origin: $origin
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-associate approved origin $origin
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect associate-approved-origin \
+--instance-id $instance_id_b \
+--origin $origin
+EOD
+        else
+            aws_connect associate-approved-origin \
+                --instance-id $instance_id_b \
+                --origin "$origin" 2>/dev/null || true
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No approved origins to process"
+fi
+
+
+############################################################
+#
+# Security Keys
+#
+
+cat <<EOD
+
+Security Keys
+-------------
+EOD
+if [ -s "$instance_alias_dir_a/security_keys.json" ]; then
+    echo "WARNING: Security keys (customer input encryption) cannot be automatically copied."
+    echo "         Manual re-association required on target instance."
+    echo "         Source security keys saved in $instance_alias_dir_a/security_keys.json"
+    jq -r ".AssociationId + \" \" + .Key" "$instance_alias_dir_a/security_keys.json" 2>/dev/null |
+    dos2unix |
+    while read sk_assoc sk_key; do
+        echo "  Security key association: $sk_assoc - MANUAL ACTION REQUIRED"
+    done
+else
+    echo "No security keys to process"
+fi
+
+
+############################################################
+#
+# Queue → Quick Connect Associations
+#
+
+cat <<EOD
+
+Queue Quick Connect Associations
+---------------------------------
+EOD
+if [ -s "$instance_alias_dir_a/queues.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/queues.json" |
+    dos2unix |
+    while read queue_id_a queue_name; do
+        queue_name_encoded=$(path_encode "$queue_name")
+        qc_file="$instance_alias_dir_a/queueQCs_$queue_name_encoded.json"
+        [ -f "$qc_file" ] || continue
+
+        qc_count=$(jq ".QuickConnectSummaryList | length" "$qc_file" 2>/dev/null)
+        [ -z "$qc_count" ] || [ "$qc_count" -eq 0 ] && continue
+
+        queue_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/queues.json" 2>/dev/null | jq -r "select(.Name == \"${queue_name//\"/%22}\") | .Id" | dos2unix)
+        [ -z "$queue_id_b" ] && continue
+
+        echo "Associating $qc_count quick connects to queue $queue_name"
+        qc_ids=$(jq -r ".QuickConnectSummaryList[].Id" "$qc_file" | sed -f "$helper_sed" | jq -Rs '[split("\n")[] | select(. != "")]')
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Associate quick connects to queue: $queue_name
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-associate quick connects to queue $queue_name
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect associate-queue-quick-connects \
+--instance-id $instance_id_b \
+--queue-id $queue_id_b \
+--quick-connect-ids $qc_ids
+EOD
+        else
+            aws_connect associate-queue-quick-connects \
+                --instance-id $instance_id_b \
+                --queue-id $queue_id_b \
+                --quick-connect-ids "$qc_ids" 2>/dev/null || true
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No queue quick connect associations to process"
+fi
+
+
+############################################################
+#
+# Hours of Operations Override Replay
+#
+
+cat <<EOD
+
+Hours of Operation Overrides
+-----------------------------
+EOD
+if [ -s "$instance_alias_dir_a/hours.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/hours.json" |
+    dos2unix |
+    while read hour_id_a hour_name; do
+        hour_name_encoded=$(path_encode "$hour_name")
+        override_file="$instance_alias_dir_a/hourOverrides_$hour_name_encoded.json"
+        [ -f "$override_file" ] || continue
+
+        override_count=$(jq ".HoursOfOperationOverrideList | length" "$override_file" 2>/dev/null)
+        [ -z "$override_count" ] || [ "$override_count" -eq 0 ] && continue
+
+        hour_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/hours.json" 2>/dev/null | jq -r "select(.Name == \"${hour_name//\"/%22}\") | .Id" | dos2unix)
+        [ -z "$hour_id_b" ] && continue
+
+        echo "Applying $override_count overrides to hours of operation $hour_name"
+        jq -r ".HoursOfOperationOverrideList[]" "$override_file" |
+        jq -s ".[]" |
+        dos2unix |
+        while IFS= read -r override_json; do
+            override_payload=$(echo "$override_json" |
+                jq --arg iid $instance_id_b --arg hid $hour_id_b \
+                    "del(.HoursOfOperationOverrideId, .LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid, HoursOfOperationId: \$hid }")
+
+            cat <<EOD >> "$helper_log"
+
+$actionLead Create hours of operation override for: $hour_name
+EOD
+            if [ -n "$dryrun" ]; then
+                cat <<EOD
+Dry-create hours of operation override for $hour_name
+
+EOD
+                cat <<EOD >> "$helper_log"
+aws connect create-hours-of-operation-override \
+--instance-id $instance_id_b \
+--hours-of-operation-id $hour_id_b
+EOD
+            else
+                echo "$override_payload" > "$helper/override_${hour_name_encoded}_tmp.json"
+                aws_connect create-hours-of-operation-override \
+                    --instance-id $instance_id_b \
+                    --hours-of-operation-id $hour_id_b \
+                    --cli-input-json "file://$helper/override_${hour_name_encoded}_tmp.json" 2>/dev/null || true
+            fi
+        done
+    done
+    test $? -eq 0 || error
+else
+    echo "No hours of operation overrides to process"
+fi
+
+
+############################################################
+#
+# Connect Cases
+#
+
+cat <<EOD
+
+Connect Cases
+-------------
+EOD
+if [ -s "$instance_alias_dir_a/cases_domains.json" ]; then
+    echo "NOTE: Connect Cases domains require manual setup on target instance."
+    echo "      Cases fields, layouts, and templates saved for reference."
+    echo "      Source: $instance_alias_dir_a/cases_domains.json"
+    jq -r ".domainId + \" \" + .name" "$instance_alias_dir_a/cases_domains.json" |
+    dos2unix |
+    while read domain_id domain_name; do
+        echo "  Cases domain: $domain_name - review saved files for manual recreation"
+    done
+else
+    echo "No Connect Cases domains to process"
+fi
+
+
+############################################################
+#
+# Outbound Campaigns
+#
+
+cat <<EOD
+
+Outbound Campaigns
+------------------
+EOD
+if [ -s "$instance_alias_dir_a/campaigns.json" ]; then
+    echo "NOTE: Outbound campaigns reference Connect instance IDs and dialer configs."
+    echo "      Review saved campaign files and recreate manually on target instance."
+    echo "      Source: $instance_alias_dir_a/campaigns.json"
+    jq -r ".id + \" \" + .name" "$instance_alias_dir_a/campaigns.json" |
+    dos2unix |
+    while read camp_id camp_name; do
+        echo "  Campaign: $camp_name - manual recreation required"
+    done
+else
+    echo "No outbound campaigns to process"
+fi
+
+
+############################################################
+#
 # Hours of operations
 #
 
@@ -351,7 +1019,8 @@ EOD
 
         aws_connect describe-hours-of-operation \
             --instance-id $instance_id_b \
-            --hours-of-operation-id $hour_id_b \
+            --hours-of-operation-id $hour_id_b |\
+            jq 'del(.HoursOfOperation.LastModifiedRegion, .HoursOfOperation.LastModifiedTime)' \
             > "$instance_alias_dir_b/$hour_json" || error $LINENO
 
         # Moving hour_json from helper_new to helper_old
@@ -372,6 +1041,7 @@ EOD
             --instance-id $instance_id_b \
             > $TEMPFILE || error $LINENO
         cat $TEMPFILE |
+        jq '.HoursOfOperationSummaryList |= map(del(.LastModifiedRegion, .LastModifiedTime))' |
         jq -r ".HoursOfOperationSummaryList[]" > "$instance_alias_dir_b/hours.json"
     fi
 fi
@@ -427,7 +1097,8 @@ EOD
 
         aws_connect describe-hours-of-operation \
             --instance-id $instance_id_b \
-            --hours-of-operation-id $hour_id_b \
+            --hours-of-operation-id $hour_id_b |\
+            jq 'del(.HoursOfOperation.LastModifiedRegion, .HoursOfOperation.LastModifiedTime)' \
             > "$instance_alias_dir_b/$hour_json" || error $LINENO
     done
     test $? -eq 0 || error
@@ -1396,6 +2067,1040 @@ EOD
             --instance-id $instance_id_b \
             --lex-bot $lexBot || error $LINENO
     done
+fi
+
+
+
+
+############################################################
+#
+# Quick Connects
+#
+
+cat <<EOD
+
+Quick Connects
+--------------
+EOD
+# Preload as $helper_old may change
+egrep "^quickconnect_" "$helper_old" > $TEMPOLD
+# Create what is in $helper_new
+egrep "^quickconnect_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No quick connects to create"
+else
+    num_qcs=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_qcs quick connects"
+    ii=0
+    sort $TEMPNEW |
+    while read qc_json; do
+        ii=$[ii+1]
+        echo "$ii. $qc_json"
+        qc_name=${qc_json#quickconnect_}
+        qc_name=${qc_name%.json}
+        qc_name_decoded=$(path_decode "$qc_name")
+
+        qc_id_a=$(jq -r ".QuickConnect.QuickConnectId" "$instance_alias_dir_a/$qc_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$qc_json" |
+        jq --arg iid $instance_id_b \
+            ".QuickConnect | del(.QuickConnectId, .QuickConnectARN, .LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$qc_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create quick connect: $qc_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create quick connect
+$(cat "$helper/$qc_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-quick-connect \
+--cli-input-json "file://$helper/$qc_json" \
+> "$helper/output_$qc_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-quick-connect \
+            --cli-input-json "file://$helper/$qc_json" \
+            > "$helper/output_$qc_json" || error $LINENO
+        qc_id_b=$(jq -r ".QuickConnectId" "$helper/output_$qc_json" | dos2unix)
+
+        aws_connect describe-quick-connect \
+            --instance-id $instance_id_b \
+            --quick-connect-id $qc_id_b |\
+            jq 'del(.QuickConnect.LastModifiedRegion, .QuickConnect.LastModifiedTime)' \
+            > "$instance_alias_dir_b/$qc_json" || error $LINENO
+
+        echo $qc_json >> "$helper_old"
+        sed -e"/$qc_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# Quick Connect: $qc_name_decoded
+s%$qc_id_a%$qc_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No quick connects to update"
+else
+    num_qcs=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_qcs quick connects for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read qc_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $qc_json ... "
+        cat "$instance_alias_dir_a/$qc_json" > $TEMPA
+        cat "$instance_alias_dir_b/$qc_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Updating $qc_json"
+
+        qc_id_b=$(jq -r ".QuickConnect.QuickConnectId" "$instance_alias_dir_b/$qc_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$qc_json" |
+        jq --arg iid $instance_id_b --arg qcid $qc_id_b \
+            ".QuickConnect | del(.QuickConnectARN, .Tags, .LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid, QuickConnectId: \$qcid }" |
+        sed -f "$helper_sed" > "$helper/$qc_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update quick connect: $qc_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update quick connect
+$(cat "$helper/$qc_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-quick-connect-config \
+--instance-id $instance_id_b \
+--quick-connect-id $qc_id_b \
+--quick-connect-config "$(jq -r '.QuickConnectConfig' "$helper/$qc_json")"
+EOD
+            continue
+        fi
+
+        qc_config=$(cat "$helper/$qc_json" | jq -r '.QuickConnectConfig' | sed -f "$helper_sed")
+        aws_connect update-quick-connect-config \
+            --instance-id $instance_id_b \
+            --quick-connect-id $qc_id_b \
+            --quick-connect-config "$qc_config" || error $LINENO
+
+        aws_connect describe-quick-connect \
+            --instance-id $instance_id_b \
+            --quick-connect-id $qc_id_b |\
+            jq 'del(.QuickConnect.LastModifiedRegion, .QuickConnect.LastModifiedTime)' \
+            > "$instance_alias_dir_b/$qc_json" || error $LINENO
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Agent Statuses
+#
+
+cat <<EOD
+
+Agent Statuses
+--------------
+EOD
+egrep "^agentstatus_" "$helper_old" > $TEMPOLD
+egrep "^agentstatus_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No agent statuses to create"
+else
+    num_as=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_as agent statuses"
+    ii=0
+    sort $TEMPNEW |
+    while read as_json; do
+        ii=$[ii+1]
+        echo "$ii. $as_json"
+        as_name=${as_json#agentstatus_}
+        as_name=${as_name%.json}
+        as_name_decoded=$(path_decode "$as_name")
+
+        as_id_a=$(jq -r ".AgentStatus.AgentStatusId" "$instance_alias_dir_a/$as_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$as_json" |
+        jq --arg iid $instance_id_b \
+            ".AgentStatus | del(.AgentStatusId, .AgentStatusARN, .LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$as_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create agent status: $as_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create agent status
+$(cat "$helper/$as_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-agent-status \
+--cli-input-json "file://$helper/$as_json" \
+> "$helper/output_$as_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-agent-status \
+            --cli-input-json "file://$helper/$as_json" \
+            > "$helper/output_$as_json" || error $LINENO
+        as_id_b=$(jq -r ".AgentStatusId" "$helper/output_$as_json" | dos2unix)
+
+        aws_connect describe-agent-status \
+            --instance-id $instance_id_b \
+            --agent-status-id $as_id_b \
+            > "$instance_alias_dir_b/$as_json" || error $LINENO
+
+        echo $as_json >> "$helper_old"
+        sed -e"/$as_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# Agent Status: $as_name_decoded
+s%$as_id_a%$as_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No agent statuses to update"
+else
+    num_as=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_as agent statuses for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read as_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $as_json ... "
+        as_name=${as_json#agentstatus_}
+        as_name=${as_name%.json}
+        as_name_decoded=$(path_decode "$as_name")
+        cat "$instance_alias_dir_a/$as_json" > $TEMPA
+        cat "$instance_alias_dir_b/$as_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Updating $as_json"
+
+        as_id_b=$(jq -r ".AgentStatus.AgentStatusId" "$instance_alias_dir_b/$as_json" | dos2unix)
+        as_order=$(jq -r ".AgentStatus.DisplayOrder" "$instance_alias_dir_a/$as_json" | dos2unix)
+        as_desc=$(jq -r ".AgentStatus.Description | select(. != null)" "$instance_alias_dir_a/$as_json" | dos2unix)
+        as_state=$(jq -r ".AgentStatus.State" "$instance_alias_dir_a/$as_json" | dos2unix)
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update agent status: $as_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update agent status $as_name_decoded
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-agent-status \
+--instance-id $instance_id_b \
+--agent-status-id $as_id_b \
+--display-order $as_order \
+--state $as_state
+EOD
+            continue
+        fi
+
+        aws_connect update-agent-status \
+            --instance-id $instance_id_b \
+            --agent-status-id $as_id_b \
+            --display-order $as_order \
+            --state $as_state || error $LINENO
+
+        aws_connect describe-agent-status \
+            --instance-id $instance_id_b \
+            --agent-status-id $as_id_b \
+            > "$instance_alias_dir_b/$as_json" || error $LINENO
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Security Profiles
+#
+
+cat <<EOD
+
+Security Profiles
+-----------------
+EOD
+egrep "^securityprofile_" "$helper_old" > $TEMPOLD
+egrep "^securityprofile_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No security profiles to create"
+else
+    num_sp=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_sp security profiles"
+    ii=0
+    sort $TEMPNEW |
+    while read sp_json; do
+        ii=$[ii+1]
+        echo "$ii. $sp_json"
+        sp_name=${sp_json#securityprofile_}
+        sp_name=${sp_name%.json}
+        sp_name_decoded=$(path_decode "$sp_name")
+
+        sp_id_a=$(jq -r ".SecurityProfile.Id" "$instance_alias_dir_a/$sp_json" | dos2unix)
+        sp_perms_file="$instance_alias_dir_a/securityprofilePerms_$sp_name.json"
+        sp_desc=$(jq -r ".SecurityProfile.Description | select(. != null)" "$instance_alias_dir_a/$sp_json" | dos2unix)
+        if [ -z "$sp_desc" ]; then sp_desc=$sp_name_decoded; fi
+
+        # Build create payload
+        cat "$instance_alias_dir_a/$sp_json" |
+        jq --arg iid $instance_id_b --arg desc "$sp_desc" \
+            ".SecurityProfile | del(.Id, .Arn, .LastModifiedRegion, .LastModifiedTime, .OrganizationResourceId) | . + { InstanceId: \$iid, Description: \$desc }" |
+        sed -f "$helper_sed" > "$helper/$sp_json"
+
+        # Embed permissions array
+        if [ -s "$sp_perms_file" ]; then
+            perms_array=$(jq -r ".Permissions" "$sp_perms_file")
+            cat "$helper/$sp_json" | jq --argjson perms "$perms_array" ". + { Permissions: \$perms }" > "${helper}/${sp_json}.tmp"
+            mv "${helper}/${sp_json}.tmp" "$helper/$sp_json"
+        fi
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create security profile: $sp_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create security profile
+$(cat "$helper/$sp_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-security-profile \
+--cli-input-json "file://$helper/$sp_json" \
+> "$helper/output_$sp_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-security-profile \
+            --cli-input-json "file://$helper/$sp_json" \
+            > "$helper/output_$sp_json" || error $LINENO
+        sp_id_b=$(jq -r ".SecurityProfileId" "$helper/output_$sp_json" | dos2unix)
+
+        aws_connect describe-security-profile \
+            --instance-id $instance_id_b \
+            --security-profile-id $sp_id_b \
+            > "$instance_alias_dir_b/$sp_json" || error $LINENO
+
+        echo $sp_json >> "$helper_old"
+        sed -e"/$sp_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# Security Profile: $sp_name_decoded
+s%$sp_id_a%$sp_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No security profiles to update"
+else
+    num_sp=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_sp security profiles for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read sp_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $sp_json ... "
+        cat "$instance_alias_dir_a/$sp_json" > $TEMPA
+        cat "$instance_alias_dir_b/$sp_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Please update $sp_json manually considering potential permission impact."
+    done
+fi
+
+
+############################################################
+#
+# Predefined Attributes
+#
+
+cat <<EOD
+
+Predefined Attributes
+---------------------
+EOD
+egrep "^predefinedattribute_" "$helper_old" > $TEMPOLD
+egrep "^predefinedattribute_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No predefined attributes to create"
+else
+    num_pa=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_pa predefined attributes"
+    ii=0
+    sort $TEMPNEW |
+    while read pa_json; do
+        ii=$[ii+1]
+        echo "$ii. $pa_json"
+        pa_name=${pa_json#predefinedattribute_}
+        pa_name=${pa_name%.json}
+        pa_name_decoded=$(path_decode "$pa_name")
+
+        cat "$instance_alias_dir_a/$pa_json" |
+        jq --arg iid $instance_id_b \
+            ".PredefinedAttribute | del(.LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$pa_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create predefined attribute: $pa_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create predefined attribute
+$(cat "$helper/$pa_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-predefined-attribute \
+--cli-input-json "file://$helper/$pa_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-predefined-attribute \
+            --cli-input-json "file://$helper/$pa_json" || error $LINENO
+
+        aws_connect describe-predefined-attribute \
+            --instance-id $instance_id_b \
+            --name "$pa_name_decoded" \
+            > "$instance_alias_dir_b/$pa_json" || error $LINENO
+
+        echo $pa_json >> "$helper_old"
+        sed -e"/$pa_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No predefined attributes to update"
+else
+    num_pa=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_pa predefined attributes for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read pa_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $pa_json ... "
+        pa_name=${pa_json#predefinedattribute_}
+        pa_name=${pa_name%.json}
+        pa_name_decoded=$(path_decode "$pa_name")
+        cat "$instance_alias_dir_a/$pa_json" > $TEMPA
+        cat "$instance_alias_dir_b/$pa_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Updating $pa_json"
+
+        cat "$instance_alias_dir_a/$pa_json" |
+        jq --arg iid $instance_id_b \
+            ".PredefinedAttribute | del(.LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$pa_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update predefined attribute: $pa_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update predefined attribute
+$(cat "$helper/$pa_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-predefined-attribute \
+--cli-input-json "file://$helper/$pa_json"
+EOD
+            continue
+        fi
+
+        aws_connect update-predefined-attribute \
+            --cli-input-json "file://$helper/$pa_json" || error $LINENO
+
+        aws_connect describe-predefined-attribute \
+            --instance-id $instance_id_b \
+            --name "$pa_name_decoded" \
+            > "$instance_alias_dir_b/$pa_json" || error $LINENO
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Task Templates
+#
+
+cat <<EOD
+
+Task Templates
+--------------
+EOD
+egrep "^tasktemplate_" "$helper_old" > $TEMPOLD
+egrep "^tasktemplate_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No task templates to create"
+else
+    num_tt=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_tt task templates"
+    ii=0
+    sort $TEMPNEW |
+    while read tt_json; do
+        ii=$[ii+1]
+        echo "$ii. $tt_json"
+        tt_name=${tt_json#tasktemplate_}
+        tt_name=${tt_name%.json}
+        tt_name_decoded=$(path_decode "$tt_name")
+
+        tt_id_a=$(jq -r ".Id" "$instance_alias_dir_a/$tt_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$tt_json" |
+        jq --arg iid $instance_id_b \
+            "del(.Id, .Arn, .CreatedTime, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$tt_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create task template: $tt_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create task template
+$(cat "$helper/$tt_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-task-template \
+--cli-input-json "file://$helper/$tt_json" \
+> "$helper/output_$tt_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-task-template \
+            --cli-input-json "file://$helper/$tt_json" \
+            > "$helper/output_$tt_json" || error $LINENO
+        tt_id_b=$(jq -r ".Id" "$helper/output_$tt_json" | dos2unix)
+
+        aws_connect get-task-template \
+            --instance-id $instance_id_b \
+            --task-template-id $tt_id_b \
+            > "$instance_alias_dir_b/$tt_json" || error $LINENO
+
+        echo $tt_json >> "$helper_old"
+        sed -e"/$tt_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# Task Template: $tt_name_decoded
+s%$tt_id_a%$tt_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No task templates to update"
+else
+    num_tt=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_tt task templates for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read tt_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $tt_json ... "
+        tt_name=${tt_json#tasktemplate_}
+        tt_name=${tt_name%.json}
+        tt_name_decoded=$(path_decode "$tt_name")
+        cat "$instance_alias_dir_a/$tt_json" > $TEMPA
+        cat "$instance_alias_dir_b/$tt_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Updating $tt_json"
+
+        tt_id_b=$(jq -r ".Id" "$instance_alias_dir_b/$tt_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$tt_json" |
+        jq --arg iid $instance_id_b --arg ttid $tt_id_b \
+            "del(.Arn, .CreatedTime, .LastModifiedTime) | . + { InstanceId: \$iid, Id: \$ttid }" |
+        sed -f "$helper_sed" > "$helper/$tt_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update task template: $tt_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update task template
+$(cat "$helper/$tt_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-task-template \
+--task-template-id $tt_id_b \
+--cli-input-json "file://$helper/$tt_json"
+EOD
+            continue
+        fi
+
+        aws_connect update-task-template \
+            --task-template-id $tt_id_b \
+            --instance-id $instance_id_b \
+            --cli-input-json "file://$helper/$tt_json" || error $LINENO
+
+        aws_connect get-task-template \
+            --instance-id $instance_id_b \
+            --task-template-id $tt_id_b \
+            > "$instance_alias_dir_b/$tt_json" || error $LINENO
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Evaluation Forms (Quality Management)
+#
+
+cat <<EOD
+
+Evaluation Forms
+----------------
+EOD
+egrep "^evaluationform_" "$helper_old" > $TEMPOLD
+egrep "^evaluationform_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No evaluation forms to create"
+else
+    num_ef=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_ef evaluation forms"
+    ii=0
+    sort $TEMPNEW |
+    while read ef_json; do
+        ii=$[ii+1]
+        echo "$ii. $ef_json"
+        ef_title=${ef_json#evaluationform_}
+        ef_title=${ef_title%.json}
+        ef_title_decoded=$(path_decode "$ef_title")
+
+        ef_id_a=$(jq -r ".EvaluationForm.EvaluationFormId" "$instance_alias_dir_a/$ef_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$ef_json" |
+        jq --arg iid $instance_id_b \
+            ".EvaluationForm | del(.EvaluationFormId, .EvaluationFormArn, .EvaluationFormVersion, .CreatedTime, .LastModifiedTime, .CreatedBy, .LastModifiedBy) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$ef_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create evaluation form: $ef_title_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create evaluation form
+$(cat "$helper/$ef_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-evaluation-form \
+--cli-input-json "file://$helper/$ef_json" \
+> "$helper/output_$ef_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-evaluation-form \
+            --cli-input-json "file://$helper/$ef_json" \
+            > "$helper/output_$ef_json" || error $LINENO
+        ef_id_b=$(jq -r ".EvaluationFormId" "$helper/output_$ef_json" | dos2unix)
+        ef_ver_b=$(jq -r ".EvaluationFormVersion" "$helper/output_$ef_json" | dos2unix)
+
+        # Activate the form so it can be used in rules
+        aws_connect activate-evaluation-form \
+            --instance-id $instance_id_b \
+            --evaluation-form-id $ef_id_b \
+            --evaluation-form-version $ef_ver_b || error $LINENO
+
+        aws_connect describe-evaluation-form \
+            --instance-id $instance_id_b \
+            --evaluation-form-id $ef_id_b \
+            > "$instance_alias_dir_b/$ef_json" || error $LINENO
+
+        echo $ef_json >> "$helper_old"
+        sed -e"/$ef_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# Evaluation Form: $ef_title_decoded
+s%$ef_id_a%$ef_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No evaluation forms to update"
+else
+    num_ef=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_ef evaluation forms for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read ef_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $ef_json ... "
+        cat "$instance_alias_dir_a/$ef_json" > $TEMPA
+        cat "$instance_alias_dir_b/$ef_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Please update $ef_json manually - evaluation form updates require version management."
+    done
+fi
+
+
+############################################################
+#
+# Rules (Contact Lens automation rules)
+#
+
+cat <<EOD
+
+Rules
+-----
+EOD
+egrep "^rule_" "$helper_old" > $TEMPOLD
+egrep "^rule_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No rules to create"
+else
+    num_rules=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_rules rules"
+    ii=0
+    sort $TEMPNEW |
+    while read rule_json; do
+        ii=$[ii+1]
+        echo "$ii. $rule_json"
+        rule_name=${rule_json#rule_}
+        rule_name=${rule_name%.json}
+        rule_name_decoded=$(path_decode "$rule_name")
+
+        rule_id_a=$(jq -r ".Rule.RuleId" "$instance_alias_dir_a/$rule_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$rule_json" |
+        jq --arg iid $instance_id_b \
+            ".Rule | del(.RuleId, .RuleArn, .CreatedTime, .LastUpdatedTime, .CreatedBy, .LastUpdatedBy) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$rule_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create rule: $rule_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create rule
+$(cat "$helper/$rule_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-rule \
+--cli-input-json "file://$helper/$rule_json" \
+> "$helper/output_$rule_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-rule \
+            --cli-input-json "file://$helper/$rule_json" \
+            > "$helper/output_$rule_json" || error $LINENO
+        rule_id_b=$(jq -r ".RuleId" "$helper/output_$rule_json" | dos2unix)
+
+        aws_connect describe-rule \
+            --instance-id $instance_id_b \
+            --rule-id $rule_id_b \
+            > "$instance_alias_dir_b/$rule_json" || error $LINENO
+
+        echo $rule_json >> "$helper_old"
+        sed -e"/$rule_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# Rule: $rule_name_decoded
+s%$rule_id_a%$rule_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No rules to update"
+else
+    num_rules=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_rules rules for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read rule_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $rule_json ... "
+        rule_name=${rule_json#rule_}
+        rule_name=${rule_name%.json}
+        rule_name_decoded=$(path_decode "$rule_name")
+        cat "$instance_alias_dir_a/$rule_json" > $TEMPA
+        cat "$instance_alias_dir_b/$rule_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Updating $rule_json"
+
+        rule_id_b=$(jq -r ".Rule.RuleId" "$instance_alias_dir_b/$rule_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$rule_json" |
+        jq --arg iid $instance_id_b --arg rid $rule_id_b \
+            ".Rule | del(.RuleArn, .CreatedTime, .LastUpdatedTime, .CreatedBy, .LastUpdatedBy) | . + { InstanceId: \$iid, RuleId: \$rid }" |
+        sed -f "$helper_sed" > "$helper/$rule_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update rule: $rule_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update rule
+$(cat "$helper/$rule_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-rule \
+--rule-id $rule_id_b \
+--cli-input-json "file://$helper/$rule_json"
+EOD
+            continue
+        fi
+
+        aws_connect update-rule \
+            --rule-id $rule_id_b \
+            --instance-id $instance_id_b \
+            --name "${rule_name_decoded//\"/\\\"}" \
+            --function "$(jq -r '.Rule.Function' "$helper/$rule_json")" \
+            --actions "$(jq -r '.Rule.Actions' "$helper/$rule_json")" \
+            --publish-status "$(jq -r '.Rule.PublishStatus' "$helper/$rule_json")" || error $LINENO
+
+        aws_connect describe-rule \
+            --instance-id $instance_id_b \
+            --rule-id $rule_id_b \
+            > "$instance_alias_dir_b/$rule_json" || error $LINENO
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Views (Agent Workspace)
+#
+
+cat <<EOD
+
+Views
+-----
+EOD
+egrep "^view_" "$helper_old" > $TEMPOLD
+egrep "^view_" "$helper_new" > $TEMPNEW
+if [ ! -s $TEMPNEW ]; then
+    echo "No views to create"
+else
+    num_views=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_views views"
+    ii=0
+    sort $TEMPNEW |
+    while read view_json; do
+        ii=$[ii+1]
+        echo "$ii. $view_json"
+        view_name=${view_json#view_}
+        view_name=${view_name%.json}
+        view_name_decoded=$(path_decode "$view_name")
+
+        view_id_a=$(jq -r ".View.Id" "$instance_alias_dir_a/$view_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$view_json" |
+        jq --arg iid $instance_id_b \
+            ".View | del(.Id, .Arn, .Version, .VersionDescription, .CreatedTime, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$view_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create view: $view_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-create view
+$(cat "$helper/$view_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect create-view \
+--cli-input-json "file://$helper/$view_json" \
+> "$helper/output_$view_json"
+EOD
+            continue
+        fi
+
+        aws_connect create-view \
+            --cli-input-json "file://$helper/$view_json" \
+            > "$helper/output_$view_json" || error $LINENO
+        view_id_b=$(jq -r ".View.Id" "$helper/output_$view_json" | dos2unix)
+
+        aws_connect describe-view \
+            --instance-id $instance_id_b \
+            --view-id $view_id_b \
+            > "$instance_alias_dir_b/$view_json" || error $LINENO
+
+        echo $view_json >> "$helper_old"
+        sed -e"/$view_json/d" "$helper_new" > $TEMPFILE
+        cat $TEMPFILE > "$helper_new"
+
+        cat <<EOD >> "$helper_sed"
+# View: $view_name_decoded
+s%$view_id_a%$view_id_b%g
+EOD
+    done
+    test $? -eq 0 || error
+fi
+
+if [ ! -s $TEMPOLD ]; then
+    echo "No views to update"
+else
+    num_views=$(echo $(cat $TEMPOLD | wc -l))
+    echo -e "\nChecking $num_views views for an update"
+    ii=0
+    sort $TEMPOLD |
+    while read view_json; do
+        ii=$[ii+1]
+        echo -n "$ii. $view_json ... "
+        view_name=${view_json#view_}
+        view_name=${view_name%.json}
+        view_name_decoded=$(path_decode "$view_name")
+        cat "$instance_alias_dir_a/$view_json" > $TEMPA
+        cat "$instance_alias_dir_b/$view_json" > $TEMPB
+        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        echo "Updating $view_json"
+
+        view_id_b=$(jq -r ".View.Id" "$instance_alias_dir_b/$view_json" | dos2unix)
+
+        cat "$instance_alias_dir_a/$view_json" |
+        jq --arg iid $instance_id_b \
+            ".View | del(.Arn, .Version, .VersionDescription, .CreatedTime, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+        sed -f "$helper_sed" > "$helper/$view_json"
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Update view: $view_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-update view
+$(cat "$helper/$view_json")
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect update-view-content \
+--instance-id $instance_id_b \
+--view-id $view_id_b \
+--status PUBLISHED \
+--content "$(jq -r '.View.Content' "$helper/$view_json")"
+EOD
+            continue
+        fi
+
+        view_content=$(cat "$helper/$view_json" | jq -r '.View.Content')
+        aws_connect update-view-content \
+            --instance-id $instance_id_b \
+            --view-id $view_id_b \
+            --status PUBLISHED \
+            --content "$view_content" || error $LINENO
+
+        aws_connect describe-view \
+            --instance-id $instance_id_b \
+            --view-id $view_id_b \
+            > "$instance_alias_dir_b/$view_json" || error $LINENO
+    done
+    test $? -eq 0 || error
+fi
+
+############################################################
+#
+# Phone Number → Contact Flow Associations
+#
+
+cat <<EOD
+
+Phone Number Flow Associations
+-------------------------------
+EOD
+if [ -s "$instance_alias_dir_a/phonenumbers.json" ]; then
+    echo "NOTE: Phone numbers cannot be automatically claimed on target instance."
+    echo "      Claim phone numbers manually, then flow associations will be applied."
+    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir_a/phonenumbers.json" |
+    dos2unix |
+    while read pn_id_a pn_number; do
+        pn_encoded=$(path_encode "$pn_number")
+        pn_file="$instance_alias_dir_a/phonenumber_$pn_encoded.json"
+        [ -f "$pn_file" ] || continue
+
+        target_arn=$(jq -r ".ClaimedPhoneNumberSummary.TargetArn // empty" "$pn_file" | dos2unix)
+        [ -z "$target_arn" ] && continue
+
+        # Substitute instance ARN
+        target_arn_b=$(echo "$target_arn" | sed -f "$helper_sed")
+        pn_id_b=$(jq -r ".PhoneNumberId" "$instance_alias_dir_b/phonenumber_$pn_encoded.json" 2>/dev/null | dos2unix)
+        [ -z "$pn_id_b" ] || [ "$pn_id_b" = "null" ] && continue
+
+        echo "Associating phone number $pn_number to flow"
+        cat <<EOD >> "$helper_log"
+
+$actionLead Associate phone number to flow: $pn_number
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-associate phone number $pn_number to $target_arn_b
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect associate-phone-number-contact-flow \
+--phone-number-id $pn_id_b \
+--instance-id $instance_id_b \
+--contact-flow-id ${target_arn_b##*/}
+EOD
+        else
+            flow_id_b="${target_arn_b##*/}"
+            aws_connect associate-phone-number-contact-flow \
+                --phone-number-id $pn_id_b \
+                --instance-id $instance_id_b \
+                --contact-flow-id $flow_id_b 2>/dev/null || true
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No phone numbers to process"
 fi
 
 

@@ -7,9 +7,6 @@
 #   connect_save on instance A and B.
 #
 
-VERSION=1.3.5
-SCRIPT_VERSION="$(basename $0) $VERSION"
-
 USAGE=$(cat <<EOD
 Usage: $(basename $0) [-?fev] [-l lambda_prefix_a=lambda_prefix_b] [-b lex_bot_prefix_a=lex_bot_prefix_b] instance_alias_a instance_alias_b helper
     Based on connect_save result on Amazon Connect instance A and B,
@@ -31,36 +28,13 @@ Usage: $(basename $0) [-?fev] [-l lambda_prefix_a=lambda_prefix_b] [-b lex_bot_p
     Note: This script create files in the helper directory without changing any instance component files.
 EOD
 )
-usage() { echo -e "$USAGE" >&2; exit 2; }
-version() { echo -e "$SCRIPT_VERSION"; exit; }
-dos2unix() { tr -d '\r'; }
-
-error() { echo -e "Error: $1" >&2; exit 1; }
-
-hex_cmd=
-if [ -x "$(command -v xxd)" ]; then
-  hex_cmd="xxd -u -p -c1"
-elif [ -x "$(command -v hexdump)" ]; then
-  hex_cmd="hexdump -v -e '/1 \"%02X\n\"'"
-elif [ -x "$(command -v od)" ]; then
-  hex_cmd="od -An -vtx1 | tr [:lower:] [:upper:] | for i in \$(cat); do echo \$i; done"
-fi
+# ---------------------------------------------------------------------------
+# Shared helpers: usage, version, dos2unix, error, hex_code, path_encode
+# (moved to connect_lib.sh — see that file for the reconciled implementations)
+# ---------------------------------------------------------------------------
+. "$(dirname "$0")/connect_lib.sh" || { echo "Error: cannot source connect_lib.sh (expected beside this script)" >&2; exit 1; }
+SCRIPT_VERSION="$(basename "$0") $CONNECT_TOOLS_VERSION"
 test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
-hex_code() { printf '%s' "$1" | eval "$hex_cmd" | while read x; do printf "%%%s" "$x"; done }
-
-path_encode()  {
-    old_lc_collate=$LC_COLLATE
-    LC_COLLATE=C
-    local length="${#1}"
-    for (( i = 0; i < length; i++ )); do
-        local c="${1:$i:1}"
-        case $c in
-            [a-zA-Z0-9.~_-]) printf '%s' "$c";;
-            *) x=$(hex_code "$c"); echo -n ${x//%0D/};;
-        esac
-    done
-    LC_COLLATE=$old_lc_collate
-}
 
 add_file() {
     alias_dir="$1"
@@ -339,6 +313,437 @@ test $? -eq 0 || error
 
 ############################################################
 #
+# Quick Connects
+#
+
+echo Checking Quick Connects ...
+jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/quickconnects.json" |
+dos2unix |
+while read qc_id_a qc_name; do
+    qc_name_encoded=$(path_encode "$qc_name")
+    qc_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/quickconnects.json" | jq -r "select(.Name == \"${qc_name//\"/%22}\") | .Id" | dos2unix)
+    if [ -z "$qc_id_b" ]; then
+        add_file "$instance_alias_dir_a" "quickconnect_$qc_name_encoded.json" $helper_new
+    else
+        add_file "$instance_alias_dir_b" "quickconnect_$qc_name_encoded.json" $helper_old
+        cat <<EOD >> $helper_sed
+# Quick Connect: $qc_name
+s%$qc_id_a%$qc_id_b%g
+EOD
+    fi
+done
+test $? -eq 0 || error
+
+
+############################################################
+#
+# Agent Statuses
+#
+
+echo Checking Agent Statuses ...
+if [ -s "$instance_alias_dir_a/agentstatuses.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/agentstatuses.json" |
+    dos2unix |
+    while read as_id_a as_name; do
+        as_name_encoded=$(path_encode "$as_name")
+        as_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/agentstatuses.json" | jq -r "select(.Name == \"${as_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$as_id_b" ]; then
+            add_file "$instance_alias_dir_a" "agentstatus_$as_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "agentstatus_$as_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Agent Status: $as_name
+s%$as_id_a%$as_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Security Profiles
+#
+
+echo Checking Security Profiles ...
+if [ -s "$instance_alias_dir_a/securityprofiles.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/securityprofiles.json" |
+    dos2unix |
+    while read sp_id_a sp_name; do
+        sp_name_encoded=$(path_encode "$sp_name")
+        sp_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/securityprofiles.json" | jq -r "select(.Name == \"${sp_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$sp_id_b" ]; then
+            add_file "$instance_alias_dir_a" "securityprofile_$sp_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "securityprofile_$sp_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Security Profile: $sp_name
+s%$sp_id_a%$sp_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Predefined Attributes
+#
+
+echo Checking Predefined Attributes ...
+if [ -s "$instance_alias_dir_a/predefinedattributes.json" ]; then
+    jq -r ".Name" "$instance_alias_dir_a/predefinedattributes.json" |
+    dos2unix |
+    while read pa_name; do
+        pa_name_encoded=$(path_encode "$pa_name")
+        pa_exists_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/predefinedattributes.json" | jq -r "select(.Name == \"${pa_name//\"/%22}\") | .Name" | dos2unix)
+        if [ -z "$pa_exists_b" ]; then
+            add_file "$instance_alias_dir_a" "predefinedattribute_$pa_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "predefinedattribute_$pa_name_encoded.json" $helper_old
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Task Templates
+#
+
+echo Checking Task Templates ...
+if [ -s "$instance_alias_dir_a/tasktemplates.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/tasktemplates.json" |
+    dos2unix |
+    while read tt_id_a tt_name; do
+        tt_name_encoded=$(path_encode "$tt_name")
+        tt_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/tasktemplates.json" | jq -r "select(.Name == \"${tt_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$tt_id_b" ]; then
+            add_file "$instance_alias_dir_a" "tasktemplate_$tt_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "tasktemplate_$tt_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Task Template: $tt_name
+s%$tt_id_a%$tt_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Evaluation Forms
+#
+
+echo Checking Evaluation Forms ...
+if [ -s "$instance_alias_dir_a/evaluationforms.json" ]; then
+    jq -r ".EvaluationFormId + \" \" + .Title" "$instance_alias_dir_a/evaluationforms.json" |
+    dos2unix |
+    while read ef_id_a ef_title; do
+        ef_title_encoded=$(path_encode "$ef_title")
+        ef_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/evaluationforms.json" | jq -r "select(.Title == \"${ef_title//\"/%22}\") | .EvaluationFormId" | dos2unix)
+        if [ -z "$ef_id_b" ]; then
+            add_file "$instance_alias_dir_a" "evaluationform_$ef_title_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "evaluationform_$ef_title_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Evaluation Form: $ef_title
+s%$ef_id_a%$ef_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Rules
+#
+
+echo Checking Rules ...
+if [ -s "$instance_alias_dir_a/rules.json" ]; then
+    jq -r ".RuleId + \" \" + .Name" "$instance_alias_dir_a/rules.json" |
+    dos2unix |
+    while read rule_id_a rule_name; do
+        rule_name_encoded=$(path_encode "$rule_name")
+        rule_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/rules.json" | jq -r "select(.Name == \"${rule_name//\"/%22}\") | .RuleId" | dos2unix)
+        if [ -z "$rule_id_b" ]; then
+            add_file "$instance_alias_dir_a" "rule_$rule_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "rule_$rule_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Rule: $rule_name
+s%$rule_id_a%$rule_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Views
+#
+
+echo Checking Views ...
+if [ -s "$instance_alias_dir_a/views.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/views.json" |
+    dos2unix |
+    while read view_id_a view_name; do
+        view_name_encoded=$(path_encode "$view_name")
+        view_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/views.json" | jq -r "select(.Name == \"${view_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$view_id_b" ]; then
+            add_file "$instance_alias_dir_a" "view_$view_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "view_$view_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# View: $view_name
+s%$view_id_a%$view_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Instance Attributes
+#
+
+echo Checking Instance Attributes ...
+if [ -f "$instance_alias_dir_a/instance_attributes.json" ] && [ -f "$instance_alias_dir_b/instance_attributes.json" ]; then
+    echo "instance_attributes.json" >> $helper_old
+fi
+
+
+############################################################
+#
+# Instance Storage Configs
+#
+
+echo Checking Instance Storage Configs ...
+if [ -f "$instance_alias_dir_a/storage_configs.json" ] && [ -f "$instance_alias_dir_b/storage_configs.json" ]; then
+    echo "storage_configs.json" >> $helper_old
+fi
+
+
+############################################################
+#
+# User Hierarchy Structure
+#
+
+echo Checking User Hierarchy Structure ...
+if [ -f "$instance_alias_dir_a/hierarchy_structure.json" ] && [ -f "$instance_alias_dir_b/hierarchy_structure.json" ]; then
+    echo "hierarchy_structure.json" >> $helper_old
+fi
+
+
+############################################################
+#
+# User Hierarchy Groups
+#
+
+echo Checking User Hierarchy Groups ...
+if [ -s "$instance_alias_dir_a/hierarchy_groups.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/hierarchy_groups.json" |
+    dos2unix |
+    while read hg_id_a hg_name; do
+        hg_name_encoded=$(path_encode "$hg_name")
+        hg_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/hierarchy_groups.json" 2>/dev/null | jq -r "select(.Name == \"${hg_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$hg_id_b" ]; then
+            add_file "$instance_alias_dir_a" "hierarchygroup_$hg_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "hierarchygroup_$hg_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Hierarchy Group: $hg_name
+s%$hg_id_a%$hg_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Users
+#
+
+echo Checking Users ...
+if [ -s "$instance_alias_dir_a/users.json" ]; then
+    jq -r ".Id + \" \" + .Username" "$instance_alias_dir_a/users.json" |
+    dos2unix |
+    while read user_id_a user_name; do
+        user_name_encoded=$(path_encode "$user_name")
+        user_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/users.json" 2>/dev/null | jq -r "select(.Username == \"${user_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$user_id_b" ]; then
+            add_file "$instance_alias_dir_a" "user_$user_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "user_$user_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# User: $user_name
+s%$user_id_a%$user_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Authentication Profiles
+#
+
+echo Checking Authentication Profiles ...
+if [ -s "$instance_alias_dir_a/auth_profiles.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/auth_profiles.json" |
+    dos2unix |
+    while read ap_id_a ap_name; do
+        ap_name_encoded=$(path_encode "$ap_name")
+        ap_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/auth_profiles.json" 2>/dev/null | jq -r "select(.Name == \"${ap_name//\"/%22}\") | .Id" | dos2unix)
+        if [ -z "$ap_id_b" ]; then
+            add_file "$instance_alias_dir_a" "authprofile_$ap_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "authprofile_$ap_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Auth Profile: $ap_name
+s%$ap_id_a%$ap_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Integration Associations
+#
+
+echo Checking Integration Associations ...
+if [ -s "$instance_alias_dir_a/integrations.json" ]; then
+    echo "integrations.json" >> $helper_old
+    echo "NOTE: Integration associations reference external systems (Lex V2, Wisdom, Voice ID, Cases) - verify external resources exist on target account."
+fi
+
+
+############################################################
+#
+# Approved Origins
+#
+
+echo Checking Approved Origins ...
+if [ -s "$instance_alias_dir_a/approved_origins.json" ]; then
+    echo "approved_origins.json" >> $helper_old
+fi
+
+
+############################################################
+#
+# Security Keys
+#
+
+echo Checking Security Keys ...
+if [ -s "$instance_alias_dir_a/security_keys.json" ]; then
+    echo "security_keys.json" >> $helper_old
+    echo "NOTE: Security keys (customer input encryption) cannot be automatically copied - manual re-association required."
+fi
+
+
+############################################################
+#
+# Data Tables
+#
+
+echo Checking Data Tables ...
+if [ -s "$instance_alias_dir_a/datatables.json" ]; then
+    jq -r ".TableId + \" \" + .TableName" "$instance_alias_dir_a/datatables.json" |
+    dos2unix |
+    while read dt_id_a dt_name; do
+        dt_name_encoded=$(path_encode "$dt_name")
+        dt_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/datatables.json" 2>/dev/null | jq -r "select(.TableName == \"${dt_name//\"/%22}\") | .TableId" | dos2unix)
+        if [ -z "$dt_id_b" ]; then
+            add_file "$instance_alias_dir_a" "datatable_$dt_name_encoded.json" $helper_new
+        else
+            add_file "$instance_alias_dir_b" "datatable_$dt_name_encoded.json" $helper_old
+            cat <<EOD >> $helper_sed
+# Data Table: $dt_name
+s%$dt_id_a%$dt_id_b%g
+EOD
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Email Addresses
+#
+
+echo Checking Email Addresses ...
+if [ -s "$instance_alias_dir_a/email_addresses.json" ]; then
+    echo "email_addresses.json" >> $helper_old
+    echo "NOTE: Email addresses require domain verification on target instance - manual setup required."
+fi
+
+
+############################################################
+#
+# Queue → Quick Connect Associations
+#
+
+echo Checking Queue Quick Connect Associations ...
+if [ -s "$instance_alias_dir_a/queues.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/queues.json" |
+    dos2unix |
+    while read queue_id_a queue_name; do
+        queue_name_encoded=$(path_encode "$queue_name")
+        qc_file_a="$instance_alias_dir_a/queueQCs_$queue_name_encoded.json"
+        qc_file_b="$instance_alias_dir_b/queueQCs_$queue_name_encoded.json"
+        if [ -f "$qc_file_a" ]; then
+            echo "queueQCs_$queue_name_encoded.json" >> $helper_old
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+
+############################################################
+#
+# Connect Cases
+#
+
+echo Checking Connect Cases ...
+if [ -s "$instance_alias_dir_a/cases_domains.json" ]; then
+    echo "cases_domains.json" >> $helper_old
+    echo "NOTE: Connect Cases domains and resources may require manual verification on target instance."
+fi
+
+
+############################################################
+#
+# Outbound Campaigns
+#
+
+echo Checking Outbound Campaigns ...
+if [ -s "$instance_alias_dir_a/campaigns.json" ]; then
+    echo "campaigns.json" >> $helper_old
+    echo "NOTE: Outbound campaigns reference Connect instance IDs and external resources - verify after copy."
+fi
+
+
+############################################################
+#
 # Contact Flow Modules
 #
 
@@ -458,6 +863,13 @@ $helper_new: Components to add to "$instance_alias_dir_b"
 $helper_old: Components to update for "$instance_alias_dir_b" based on "$instance_alias_dir_a"
 $helper_sed: SED script used to update components
 $flow_template: Contact Flow template json
+
+Resources compared: prompts, hours of operations, queues, quick connects,
+  routing profiles, agent statuses, security profiles, predefined attributes,
+  task templates, evaluation forms, rules, views, contact flow modules, contact flows,
+  instance attributes, storage configs, user hierarchy, users, auth profiles,
+  integration associations, approved origins, security keys, data tables,
+  email addresses, queue QC associations, Connect Cases, outbound campaigns
 
 All done
 EOD
