@@ -5,9 +5,6 @@
 # Get a list of components of an Amazon Connect instance
 # add more
 
-VERSION=1.5.0
-SCRIPT_VERSION="$(basename $0) $VERSION"
-
 USAGE=$(cat <<EOD
 Usage: connect_save [-?fsev] [-p aws_profile] [-c contact_flow_prefix] [-G ignore_prefix] instance_alias
     Retrieve components from an Amazon Connect instance into plain files
@@ -24,74 +21,32 @@ Usage: connect_save [-?fsev] [-p aws_profile] [-c contact_flow_prefix] [-G ignor
     -?                      Help
 EOD
 )
-usage() { echo -e "$USAGE" >&2; exit 2; }
-version() { echo -e "$SCRIPT_VERSION"; exit; }
-dos2unix() { tr -d '\r'; }
+# ---------------------------------------------------------------------------
+# Shared helpers (usage, version, dos2unix, error, hex_code, path_encode,
+# aws_connect) now live in connect_lib.sh. Source it, then set the
+# connect_save-specific knobs/overrides documented in that file.
+# ---------------------------------------------------------------------------
+. "$(dirname "$0")/connect_lib.sh" || { echo "Error: cannot source connect_lib.sh (expected beside this script)" >&2; exit 1; }
+SCRIPT_VERSION="$(basename "$0") $CONNECT_TOOLS_VERSION"
+test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
 
-error() {
-    if [ "$#" -ne 0 ]; then
-        if [[ ! "$1" =~ ^[[:digit:]]+$ ]]; then
-            # Not an AWS CLI error
-            cat <<EOD >&2
-Error: $*
-EOD
-        else
-            # An AWS CLI error
-            line_no=$1
-            cf=$2
-            manifest=$3
-            if [ -n "$cf" -a -n "$manifest" -a -n "$skip_cf_errors" ]; then
-                # TEMPCF reused and needs to be emptied afterwards
-                cat $manifest |
-                jq -r "select(.Name != \"$cf\")" > $TEMPCF
-                cat $TEMPCF > $manifest
-                echo "\"$cf\" skipped and removed from $manifest."
-                echo
-                # Return ok to allow the main process to continue without this CF
-                > $TEMPCF
-                return 0
-            else
-                cat <<EOD >&2
-Error at line ${line_no}. Recommended actions:
+# connect_save-specific recommended-actions text for AWS CLI errors.
+# Consumed by the shared error() in connect_lib.sh (called as: error_cli_hint <line_no>).
+error_cli_hint() {
+    cat <<EOD
+Error at line ${1}. Recommended actions:
 1. Create all required prompts on the target instance
 2. Publish all in-scope contact flows and contact flow modules (or use -s to skip them)
 3. Install the latest AWS CLI: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
 EOD
-            fi
-        fi
-    fi
-    exit 1
-}
-
-hex_cmd=
-if [ -x "$(command -v xxd)" ]; then
-  hex_cmd="xxd -u -p -c1"
-elif [ -x "$(command -v hexdump)" ]; then
-  hex_cmd="hexdump -v -e '/1 \"%02X\n\"'"
-elif [ -x "$(command -v od)" ]; then
-  hex_cmd="od -An -vtx1 | tr [:lower:] [:upper:] | for i in \$(cat); do echo \$i; done"
-fi
-test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
-hex_code() { printf '%s' "$1" | eval "$hex_cmd" | while read x; do printf "%%%s" "$x"; done }
-
-path_encode()  {
-    old_lc_collate=$LC_COLLATE
-    LC_COLLATE=C
-    local length="${#1}"
-    for (( i = 0; i < length; i++ )); do
-        local c="${1:$i:1}"
-        case $c in
-            [a-zA-Z0-9.~_-]) printf '%s' "$c";;
-            *) x=$(hex_code "$c"); echo -n ${x//%0D/};;
-        esac
-    done
-    LC_COLLATE=$old_lc_collate
 }
 
 # AWS CLI needs to output JSON
 export AWS_DEFAULT_OUTPUT=json
 aws_cli_encoding=UTF-8
 
+# connect_save-specific output filter (codepage/iconv) — overrides the
+# passthrough default in connect_lib.sh; consumed by the shared aws_connect().
 aws_cli_out_filter() {
     if [ -n "$codepage" -a "$codepage" != "$aws_cli_encoding" ]; then
         cat > $TEMPOF
@@ -112,21 +67,6 @@ add_json_attribute() {
     jq -rs "map(if .Id == \"$key_id\" then . + {$attr_name: \"${attr_value//\"/\\\"}\"} else . end) | .[]" > $TEMPCF
     cat $TEMPCF > $manifest
     > $TEMPCF
-}
-
-aws_connect() {
-    local cmd=""
-    local ii
-    for ii; do
-        [[ "$ii" == *" "* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
-    done
-    echo "aws connect$profile_flag$cmd" >> "$aws_cli_log"
-    eval "aws connect$profile_flag$cmd | aws_cli_out_filter" 2> $TEMPERR
-    local ret=$?
-    if [ -s $TEMPERR ]; then
-        cat $TEMPERR | tee -a "$aws_cli_log" >&2
-    fi
-    return $ret
 }
 
 TEMPFILE=$(mktemp)
@@ -165,6 +105,9 @@ while getopts "?fsevp:c:G:C:" arg; do
     esac
 done
 shift $((OPTIND-1))
+
+# Bridge connect_save's -s flag to the shared error() skip behaviour (connect_lib.sh)
+ERROR_SKIP_ENABLED=$skip_cf_errors
 
 if [ "$(hex_code "é")" != "%C3%A9" ]; then
     echo "WARNING: This system may not encode Extended ASCII characters properly." >&2
