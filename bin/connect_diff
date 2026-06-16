@@ -2,30 +2,30 @@
 
 ############################################################
 #
-# Find the differences of instance A and instance B and produce helper files.
+# Find the differences between a source and target Amazon Connect instance
+# and produce helper files for connect_copy to apply.
 # Note: This script does not use AWS CLI but instead uses results from
-#   connect_save on instance A and B.
+#   connect_save on both the source and target instances.
 #
 
 USAGE=$(cat <<EOD
-Usage: $(basename $0) [-?fev] [-l lambda_prefix_a=lambda_prefix_b] [-b lex_bot_prefix_a=lex_bot_prefix_b] instance_alias_a instance_alias_b helper
-    Based on connect_save result on Amazon Connect instance A and B,
-    find the differences and produce helper files to safely copy components from A to B.
+Usage: $(basename $0) [-?fev] [-l source_lambda_prefix=target_lambda_prefix] [-b source_lex_bot_prefix=target_lex_bot_prefix] source_instance target_instance helper
+    Based on connect_save results, find the differences between the source and target
+    Amazon Connect instances and produce helper files to copy components from source to target.
 
-    instance_alias_a    Alias of the Connect instance A
-    instance_alias_b    Alias of the Connect instance B
-                        (Aliases can be a path to the directory where the instance was saved using connect_save.)
+    source_instance     Alias (or directory path) of the source Connect instance
+    target_instance     Alias (or directory path) of the target Connect instance
     helper              Name of the helper directory
     -f                  Force removal of existing helper directory
     -e                  Proceed even when the system may not encode Extended ASCII characters properly
     -v                  Show version of this script
-    -l lambda_prefix_a=lambda_prefix_b
-                        Lambda function name prefixes for instances A and B (if different) to be replaced during copying
-    -b lex_bot_prefix_a=lex_bot_prefix_b
-                        Lex bot (Classic) name prefixes for instances A and B (if different) to be replaced during copying
+    -l source_lambda_prefix=target_lambda_prefix
+                        Lambda function name prefixes for source and target (if different) to be replaced during copying
+    -b source_lex_bot_prefix=target_lex_bot_prefix
+                        Lex bot (Classic) name prefixes for source and target (if different) to be replaced during copying
     -?                  Help
 
-    Note: This script create files in the helper directory without changing any instance component files.
+    Note: This script creates files in the helper directory without changing any instance component files.
 EOD
 )
 # ---------------------------------------------------------------------------
@@ -116,8 +116,8 @@ flow_template=$helper/flow_template.json
 module_template=$helper/module_template.json
 
 cat <<EOD
-Instance Alias A: $instance_alias_a (in directory "$instance_alias_dir_a")
-Instance Alias B: $instance_alias_b (in directory "$instance_alias_dir_b")
+Source Instance: $instance_alias_a (in directory "$instance_alias_dir_a")
+Target Instance: $instance_alias_b (in directory "$instance_alias_dir_b")
 Helper: $helper
 EOD
 
@@ -145,8 +145,10 @@ done
 ############################################################
 #
 # Instance
+# Note: "a" = source instance, "b" = target instance throughout helper.var
 #
 
+echo "# source instance (a) and target instance (b)" > $helper_var
 echo "instance_alias_a=\"$instance_alias_a\"" | tee -a $helper_var
 echo "instance_alias_dir_a=\"$instance_alias_dir_a\"" | tee -a $helper_var
 echo "instance_alias_b=\"$instance_alias_b\"" | tee -a $helper_var

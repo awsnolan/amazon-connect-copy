@@ -5,72 +5,38 @@
 # Copy Amazon Connect instance A to instance B safely
 #
 
-VERSION=1.5.0
-SCRIPT_VERSION="$(basename $0) $VERSION"
-
 AWS_CLI_MAX_QUEUE_CONFIGS=10
 
 USAGE=$(cat <<EOD
 Usage: $(basename $0) [-?dev] helper
-    Copy Amazon Connect instance A to instance B safely, based on the
-    connect_save and connect_diff results, under the helper directory
-    creating new components in helper.new, updating old components in helper.old,
-    and updating references defined in helper.sed.
+    Copy components from the source Amazon Connect instance to the target instance,
+    based on the connect_save and connect_diff results under the helper directory.
+    New components (in helper.new) are created, existing components (in helper.old)
+    are updated, and internal references (in helper.sed) are remapped.
 
-    helper  Name of the helper directory
+    helper  Name of the helper directory (produced by connect_diff)
     -d      Dry run - Run through the script but not updating the target instance
     -e      Proceed even when the system may not encode Extended ASCII characters properly
     -v      Show version of this script
     -?      Help
 EOD
 )
-usage() { echo -e "$USAGE" >&2; exit 2; }
-version() { echo -e "$SCRIPT_VERSION"; exit; }
-dos2unix() { tr -d '\r'; }
+# ---------------------------------------------------------------------------
+# Shared helpers (usage, version, dos2unix, error, hex_code, path_encode,
+# aws_connect) now live in connect_lib.sh. Source it, then set the
+# connect_copy-specific knobs/overrides documented in that file.
+# ---------------------------------------------------------------------------
+. "$(dirname "$0")/connect_lib.sh" || { echo "Error: cannot source connect_lib.sh (expected beside this script)" >&2; exit 1; }
+SCRIPT_VERSION="$(basename "$0") $CONNECT_TOOLS_VERSION"
+test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
 
-error() {
-    if [[ ! "$1" =~ ^[[:digit:]]+$ ]]; then
-        # Not an AWS CLI error
-        cat <<EOD >&2
-Error: $*
-EOD
-    else
-        # An AWS CLI error
-        line_no=$1
-        shift
-        cat <<EOD >&2
-$*
-Error at line ${line_no}. Recommended actions:
+# connect_copy-specific recommended-actions text for AWS CLI errors.
+error_cli_hint() {
+    cat <<EOD
+Error at line ${1}. Recommended actions:
 Make sure all required prompts exist in the target instance, and
 Install the latest AWS CLI: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html .
 EOD
-    fi
-    exit 1
-}
-
-hex_cmd=
-if [ -x "$(command -v xxd)" ]; then
-  hex_cmd="xxd -u -p -c1"
-elif [ -x "$(command -v hexdump)" ]; then
-  hex_cmd="hexdump -v -e '/1 \"%02X\n\"'"
-elif [ -x "$(command -v od)" ]; then
-  hex_cmd="od -An -vtx1 | tr [:lower:] [:upper:] | for i in \$(cat); do echo \$i; done"
-fi
-test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
-hex_code() { printf '%s' "$1" | eval "$hex_cmd" | while read x; do printf "%%%s" "$x"; done }
-
-path_encode()  {
-    old_lc_collate=$LC_COLLATE
-    LC_COLLATE=C
-    local length="${#1}"
-    for (( i = 0; i < length; i++ )); do
-        local c="${1:$i:1}"
-        case $c in
-            [a-zA-Z0-9.~_-]) printf '%s' "$c";;
-            *) x=$(hex_code "$c"); echo -n ${x//%0D/};;
-        esac
-    done
-    LC_COLLATE=$old_lc_collate
 }
 
 path_decode() {
@@ -144,20 +110,6 @@ check_contact_flow() {
 
 # AWS CLI needs to output JSON
 export AWS_DEFAULT_OUTPUT=json
-aws_connect() {
-    local cmd=""
-    local ii
-    for ii; do
-        [[ "$ii" =~ " " || "$ii" =~ "(" || "$ii" =~ ")" ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
-    done
-    echo "aws connect$profile_flag$cmd" >> "$aws_cli_log"
-    eval "aws connect$profile_flag$cmd" 2> $TEMPERR
-    local ret=$?
-    if [ -s $TEMPERR ]; then
-        cat $TEMPERR | tee -a "$aws_cli_log" >&2
-    fi
-    return $ret
-}
 
 TEMPFILE=$(mktemp)
 TEMPERR=${TEMPFILE}_err
@@ -223,11 +175,11 @@ profile=$aws_profile_b
 profile_flag=${profile:+ --profile $profile}
 
 cat <<EOD
-Instance Alias A: $instance_alias_a (in directory "$instance_alias_dir_a")
-Instance Alias B: $instance_alias_b (in directory "$instance_alias_dir_b")
+Source Instance: $instance_alias_a (in directory "$instance_alias_dir_a")
+Target Instance: $instance_alias_b (in directory "$instance_alias_dir_b")
 Helper Directory: $helper
-AWS Profile B in use: ${profile:-${AWS_PROFILE:-(default)}}
-Context Flow Prefix: $contact_flow_prefix
+Target AWS Profile: ${profile:-${AWS_PROFILE:-(default)}}
+Contact Flow Prefix: $contact_flow_prefix
 EOD
 
 contact_flow_prefix_encoded=$(path_encode "$contact_flow_prefix")

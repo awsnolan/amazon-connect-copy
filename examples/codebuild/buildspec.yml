@@ -5,7 +5,9 @@ version: 0.2
 # ├── bin
 # │   ├── connect_copy
 # │   ├── connect_diff
-# │   └── connect_save
+# │   ├── connect_lib.sh
+# │   ├── connect_save
+# │   └── connect_validate
 # ├── buildspec.yml
 # └── src
 #     └── source_dir_saved_by_connect_save
@@ -42,15 +44,17 @@ phases:
       - ./aws/install -b /usr/local/bin/sbt/bin
   pre_build:
     commands:
-      - bin/connect_save $save_options "$target_dir" "" "$contact_flow_prefix"
-      - bin/connect_diff "$source_dir" "$target_dir" "$helper" "$source_lambda_prefix" "$target_lambda_prefix"
+      - bin/connect_save ${save_options} ${contact_flow_prefix:+-c "$contact_flow_prefix"} "$target_dir"
+      - bin/connect_validate "$source_dir"
+      - bin/connect_diff -l "${source_lambda_prefix}=${target_lambda_prefix}" "$source_dir" "$target_dir" "$helper"
   build:
     commands:
       - bin/connect_copy -d "$helper"
       - test $? -ne 0 && echo "No updates" || bin/connect_copy "$helper"
   post_build:
     commands:
-      - bin/connect_save $save_options "$target_post_build_dir" "" "$contact_flow_prefix"
+      - bin/connect_save ${save_options} ${contact_flow_prefix:+-c "$contact_flow_prefix"} "$target_post_build_dir"
+      - bin/connect_validate "$target_post_build_dir"
 artifacts:
   files:
     - "**/*"

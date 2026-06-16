@@ -1,5 +1,37 @@
 # Release Notes
 
+- Version 1.5.0
+  - **New components saved and copied:**
+    - Quick Connects
+    - Agent Statuses (CUSTOM type)
+    - Security Profiles (with permissions)
+    - Predefined Attributes
+    - Task Templates
+    - Evaluation Forms
+    - Rules (Contact Lens automation)
+    - Views (Agent Workspace)
+    - User Hierarchy Structure and Groups
+    - Users
+    - Hours of Operation Overrides
+  - **New components saved (informational):**
+    - Phone Numbers (claimed, with flow associations)
+    - Vocabularies
+    - Data Tables
+    - Instance Attributes (feature flags)
+    - Instance Storage Configs
+    - Authentication Profiles
+    - Integration Associations (Lex V2, Amazon Q, Voice ID, Cases)
+    - Approved Origins (CCP embed CORS)
+    - Security Keys
+    - Outbound Campaigns
+  - **New tool: `connect_validate`** — validates saved instance directories
+    (local JSON integrity, cross-reference checks, and live AWS comparison)
+  - **Shared library refactor** — common helpers extracted to `connect_lib.sh`,
+    sourced by all scripts (eliminates code duplication)
+  - **Terminology clarity** — usage text and runtime output now use
+    "source instance" / "target instance" instead of "A" / "B"
+  - Updated README with complete component list and IAM permissions
+
 - Version 1.3.5
   - Handle null component descriptions by setting the corresponding target description to the component name
 

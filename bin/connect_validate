@@ -6,9 +6,6 @@
 # Tests every resource type saved by connect_save
 #
 
-VERSION=1.1.0
-SCRIPT_VERSION="$(basename $0) $VERSION"
-
 USAGE=$(cat <<EOD
 Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] instance_alias
     Validate a saved Amazon Connect instance directory against the live instance.
@@ -23,9 +20,13 @@ Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] instance_alias
     -?              Help
 EOD
 )
-usage() { echo -e "$USAGE" >&2; exit 2; }
-version() { echo -e "$SCRIPT_VERSION"; exit; }
-dos2unix() { tr -d '\r'; }
+# ---------------------------------------------------------------------------
+# Shared helpers (usage, version, dos2unix, aws_connect) now live in
+# connect_lib.sh. connect_validate uses quiet-mode aws_connect (no stderr).
+# ---------------------------------------------------------------------------
+. "$(dirname "$0")/connect_lib.sh" || { echo "Error: cannot source connect_lib.sh (expected beside this script)" >&2; exit 1; }
+SCRIPT_VERSION="$(basename "$0") $CONNECT_TOOLS_VERSION"
+AWS_CONNECT_QUIET=on
 
 ############################################################
 # Test framework
@@ -173,20 +174,8 @@ assert_live_exists() {
     fi
 }
 
-############################################################
-# AWS CLI wrapper (same pattern as connect_save/copy)
-############################################################
-
+# AWS CLI needs to output JSON
 export AWS_DEFAULT_OUTPUT=json
-
-aws_connect() {
-    local cmd=""
-    local ii
-    for ii; do
-        [[ "$ii" == *" "* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
-    done
-    eval "aws connect$profile_flag$cmd" 2>/dev/null
-}
 
 ############################################################
 # Argument parsing
@@ -230,7 +219,7 @@ touch $TEMPFILE $TEMPERR
 
 cat <<EOD
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  connect_validate $VERSION
+  connect_validate $CONNECT_TOOLS_VERSION
   Instance : $instance_alias
   Directory: $instance_alias_dir
   Mode     : $mode
