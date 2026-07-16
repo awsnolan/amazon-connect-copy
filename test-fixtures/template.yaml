@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  DR Toolkit test fixtures — Lambda functions, DynamoDB table, and Lex V2 bot
+  for exercising connect_backup external dependency capture.
+
+Parameters:
+  ConnectInstanceArn:
+    Type: String
+    Description: ARN of the Amazon Connect instance to associate with
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 8
+    MemorySize: 128
+    Architectures:
+      - arm64
+
+Resources:
+
+  ##############################################
+  # DynamoDB Table
+  ##############################################
+
+  CustomersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: dr-test-customers
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PhoneNumber
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PhoneNumber
+          KeyType: HASH
+      Tags:
+        - Key: Project
+          Value: dr-toolkit-test
+
+  ##############################################
+  # Lambda 1: Customer Lookup
+  ##############################################
+
+  CustomerLookupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dr-test-customer-lookup
+      Handler: app.handler
+      CodeUri: src/customer_lookup/
+      Description: Looks up customer by phone number in DynamoDB
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref CustomersTable
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref CustomersTable
+      Tags:
+        Project: dr-toolkit-test
+
+  CustomerLookupConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CustomerLookupFunction
+      Action: lambda:InvokeFunction
+      Principal: connect.amazonaws.com
+      SourceArn: !Ref ConnectInstanceArn
+
+  ##############################################
+  # Lambda 2: After Hours Check
+  ##############################################
+
+  AfterHoursFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: dr-test-after-hours-check
+      Handler: app.handler
+      CodeUri: src/after_hours/
+      Description: Returns whether the contact centre is currently open
+      Environment:
+        Variables:
+          TIMEZONE: Australia/Sydney
+          OPEN_HOUR: "8"
+          CLOSE_HOUR: "18"
+      Tags:
+        Project: dr-toolkit-test
+
+  AfterHoursConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AfterHoursFunction
+      Action: lambda:InvokeFunction
+      Principal: connect.amazonaws.com
+      SourceArn: !Ref ConnectInstanceArn
+
+  ##############################################
+  # Lex V2 Bot: Main Menu
+  ##############################################
+
+  MainMenuBot:
+    Type: AWS::Lex::Bot
+    Properties:
+      Name: dr-test-MainMenu
+      Description: Test IVR main menu bot for DR toolkit testing
+      DataPrivacy:
+        ChildDirected: false
+      IdleSessionTTLInSeconds: 300
+      RoleArn: !GetAtt LexBotRole.Arn
+      BotLocales:
+        - LocaleId: en_AU
+          NluConfidenceThreshold: 0.40
+          Intents:
+            - Name: CheckBalance
+              Description: Customer wants to check their account balance
+              SampleUtterances:
+                - Utterance: check my balance
+                - Utterance: what is my balance
+                - Utterance: how much do I owe
+                - Utterance: account balance
+                - Utterance: balance check
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: Transferring you to check your balance.
+            - Name: SpeakToAgent
+              Description: Customer wants to speak to a human agent
+              SampleUtterances:
+                - Utterance: speak to someone
+                - Utterance: talk to an agent
+                - Utterance: I need help
+                - Utterance: operator
+                - Utterance: representative
+                - Utterance: human
+              IntentClosingSetting:
+                ClosingResponse:
+                  MessageGroupsList:
+                    - Message:
+                        PlainTextMessage:
+                          Value: Connecting you to an agent now.
+            - Name: FallbackIntent
+              Description: Default fallback
+              ParentIntentSignature: AMAZON.FallbackIntent
+      Tags:
+        - Key: Project
+          Value: dr-toolkit-test
+
+  LexBotRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-test-lex-bot-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lexv2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LexBotPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - polly:SynthesizeSpeech
+                  - comprehend:DetectSentiment
+                Resource: '*'
+
+  MainMenuBotVersion:
+    Type: AWS::Lex::BotVersion
+    DependsOn: MainMenuBot
+    Properties:
+      BotId: !Ref MainMenuBot
+      BotVersionLocaleSpecification:
+        - LocaleId: en_AU
+          BotVersionLocaleDetails:
+            SourceBotVersion: DRAFT
+
+  MainMenuBotAlias:
+    Type: AWS::Lex::BotAlias
+    Properties:
+      BotId: !Ref MainMenuBot
+      BotAliasName: live
+      BotVersion: !GetAtt MainMenuBotVersion.BotVersion
+      Tags:
+        - Key: Project
+          Value: dr-toolkit-test
+
+Outputs:
+  CustomerLookupArn:
+    Value: !GetAtt CustomerLookupFunction.Arn
+  AfterHoursArn:
+    Value: !GetAtt AfterHoursFunction.Arn
+  LexBotId:
+    Value: !Ref MainMenuBot
+  LexBotAliasId:
+    Value: !Ref MainMenuBotAlias
+  LexBotAliasArn:
+    Value: !GetAtt MainMenuBotAlias.Arn
+  CustomersTableName:
+    Value: !Ref CustomersTable
