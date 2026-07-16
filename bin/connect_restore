@@ -1,0 +1,228 @@
+#!/bin/bash
+
+############################################################
+#
+# connect_restore — Restore Amazon Connect instance A to instance B safely
+#
+
+VERSION=2.0.0
+SCRIPT_VERSION="$(basename $0) $VERSION"
+
+LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
+. "$LIB_DIR/common.sh"
+
+AWS_CLI_MAX_QUEUE_CONFIGS=10
+
+USAGE=$(cat <<EOD
+Usage: $(basename $0) [-?dev] [--only sections] [--skip sections] helper
+    Restore Amazon Connect instance A to instance B safely, based on the
+    connect_backup and connect_plan results, under the helper directory
+    creating new components in helper.new, updating old components in helper.old,
+    and updating references defined in helper.sed.
+
+    helper  Name of the helper directory
+    -d      Dry run - Run through the script but not updating the target instance
+    -e      Proceed even when the system may not encode Extended ASCII characters properly
+    -v      Show version of this script
+    --only sections  Run only these sections (comma-separated)
+    --skip sections  Skip these sections (comma-separated)
+    -?      Help
+
+    Sections: preflight, instance, hours, queues, routing, flows, features, supporting, channels
+EOD
+)
+
+# Override aws_connect to use restore variant
+aws_connect() { aws_connect_restore "$@"; }
+
+# Lex bot substitution helper (carried over from original)
+sub_lex_bot() {
+    if [ -z "$lex_bot_prefix_a" ] && [ -z "$lex_bot_prefix_b" ]; then
+        cat
+    else
+        cat > $TEMP1
+        local lexExists=$(cat $TEMP1 | jq ".Actions[] | select(.Type == \"ConnectParticipantWithLexBot\") | has(\"Type\")")
+        if [ -z "$lexExists" ]; then
+            cat $TEMP1
+        else
+            cat $TEMP1 | jq "
+.Actions[] |
+if .Type == \"ConnectParticipantWithLexBot\"
+then .Parameters.LexBot.Name = (.Parameters.LexBot.Name |
+    sub(\"^$lex_bot_prefix_a\"; \"$lex_bot_prefix_b\"))
+else .
+end
+" > $TEMP2
+            cat $TEMP1 |
+            jq -r --slurpfile actions $TEMP2 ".Actions = \$actions"
+        fi
+    fi
+}
+
+# Contact flow broken-reference checker
+check_contact_flow() {
+    cf_json=$1
+    if [ ! -s $TEMPSED ]; then
+        cat $helper_sed |
+        egrep -v "^#" |
+        cut -d% -f3 > $TEMPSED
+    fi
+    echo "### Broken references found in $cf_json:" > $TEMPCHK
+    cat $cf_json |
+    jq -r . |
+    grep arn:aws:connect: |
+    cut -d\" -f2,4 |
+    sed -e's/"/ /g' |
+    egrep -v "^id |^arn " |
+    while read name val; do
+        val_id=${val/arn:aws:connect:*\//}
+        grep -q $val_id $TEMPSED || echo "### $name: $val_id" >> $TEMPCHK
+    done
+    if [ $(cat $TEMPCHK | wc -l) -le 1 ]; then
+        > $TEMPCHK
+    else
+        echo >> $TEMPCHK
+        cat $TEMPCHK
+        return 1
+    fi
+}
+
+# diff_files helper (compare source vs target with sed transform)
+diff_files() {
+    sed -f "$helper_sed" $TEMPA | tee $TEMP1 | sort > $TEMP2
+    sort $TEMPB | diff -qbB - $TEMP2 &> /dev/null
+    if [ $? -eq 0 ]; then
+        echo "same"
+    else
+        echo "changed"
+    fi
+}
+
+############################################################
+# Argument parsing
+############################################################
+
+# AWS CLI needs to output JSON
+export AWS_DEFAULT_OUTPUT=json
+
+TEMPFILE=$(mktemp)
+TEMPERR=${TEMPFILE}_err
+TEMPNEW=${TEMPFILE}_new
+TEMPOLD=${TEMPFILE}_old
+TEMPMOD=${TEMPFILE}_mod
+TEMPCHK=${TEMPFILE}_chk
+TEMPSED=${TEMPFILE}_sed
+TEMPA=${TEMPFILE}_A
+TEMPB=${TEMPFILE}_B
+TEMP1=${TEMPFILE}_1
+TEMP2=${TEMPFILE}_2
+TEMPMANUAL=${TEMPFILE}_manual
+TEMPLIST="$TEMPFILE $TEMPERR $TEMPNEW $TEMPOLD $TEMPMOD $TEMPCHK $TEMPSED $TEMPA $TEMPB $TEMP1 $TEMP2 $TEMPMANUAL"
+trap 'rm -f $TEMPLIST' EXIT
+touch $TEMPLIST
+
+actionLead="# Action -"
+dryrun=
+ignore_improper_extended_ascii=
+ONLY_SECTIONS=
+SKIP_SECTIONS=
+
+# Handle --only and --skip before getopts
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --only) ONLY_SECTIONS="${2//,/ }"; shift 2;;
+    --skip) SKIP_SECTIONS="${2//,/ }"; shift 2;;
+    *)      args+=("$1"); shift;;
+    esac
+done
+set -- "${args[@]}"
+
+while getopts "?dev" arg; do
+    case "$arg" in
+    d)  dryrun=on; echo "Dry Run";;
+    e)  ignore_improper_extended_ascii=on;;
+    v)  version;;
+    *)  usage;;
+    esac
+done
+shift $((OPTIND-1))
+
+test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
+check_encoding
+
+helper=$1
+if [ -z "$helper" ]; then
+    usage
+fi
+
+for ext in var sed new old; do
+    eval helper_$ext="$helper/helper.$ext"
+done
+
+if [ ! -s "$helper_var" ]; then
+    error "\"$helper_var\" does not exist. \"$helper\" is probably not a Helper directory."
+fi
+
+############################################################
+# Load helper variables and setup
+############################################################
+
+. "$helper_var"
+profile=$aws_profile_b
+profile_flag=${profile:+ --profile $profile}
+
+cat <<EOD
+Instance Alias A: $instance_alias_a (in directory "$instance_alias_dir_a")
+Instance Alias B: $instance_alias_b (in directory "$instance_alias_dir_b")
+Helper Directory: $helper
+AWS Profile B in use: ${profile:-${AWS_PROFILE:-(default)}}
+Context Flow Prefix: $contact_flow_prefix
+EOD
+
+contact_flow_prefix_encoded=$(path_encode "$contact_flow_prefix")
+contact_flow_prefix_text="${contact_flow_prefix:+ with names prefixed with \"$contact_flow_prefix\"}"
+
+helper_older_than=
+if [ "$helper_var" -ot "$instance_alias_dir_a/instance.var" ]; then
+    helper_older_than="$helper_older_than $instance_alias_a"
+fi
+if [ "$helper_var" -ot "$instance_alias_dir_b/instance.var" ]; then
+    helper_older_than="$helper_older_than $instance_alias_b"
+fi
+if [ -n "$helper_older_than" ]; then
+    echo
+    error "Instances$helper_older_than updated since helper \"$helper\" was created. Please run connect_plan again."
+fi
+
+helper_log="${helper%/}.log"
+aws_cli_log="$helper_log"
+cat <<EOD > "$helper_log"
+# This log file is for AWS CLI tracing, not for direct execution.
+# Please use the $(basename $0) command (in non-dry-run mode) to perform the restore instead.
+#
+EOD
+
+if [ -n "$dryrun" ]; then
+    cat <<EOD >> "$helper_log"
+# Dry-run mode - Actions listed below are not being carried out
+#
+EOD
+fi
+
+############################################################
+# Run sections in dependency order
+############################################################
+
+run_section "preflight"   "$LIB_DIR/restore/preflight.sh"
+run_section "instance"    "$LIB_DIR/restore/instance.sh"
+run_section "hours"       "$LIB_DIR/restore/hours.sh"
+run_section "queues"      "$LIB_DIR/restore/queues.sh"
+run_section "routing"     "$LIB_DIR/restore/routing.sh"
+run_section "flows"       "$LIB_DIR/restore/flows.sh"
+run_section "features"    "$LIB_DIR/restore/features.sh"
+run_section "supporting"  "$LIB_DIR/restore/supporting.sh"
+run_section "channels"    "$LIB_DIR/restore/channels.sh"
+
+# Summary always runs
+. "$LIB_DIR/restore/summary.sh"

@@ -1,295 +1,235 @@
-# Amazon-Connect-Copy User Guide
+# Amazon Connect DR Toolkit
 
-The Amazon-Connect-Copy script (v1.3.5) copies components from the source Amazon Connect instance
-to the target instance safely, fixing all internal references.
+A set of bash scripts for backing up and restoring Amazon Connect instances.
+Designed for Disaster Recovery — back up everything, restore to a fresh instance,
+validate it works.
 
-You may use Amazon-Connect-Copy to deploy an Amazon Connect instance across environments
-(AWS accounts or regions), or to save a backup copy of the instance for restoration
-when required, reducing an hours-long error-prone manual job to a few minutes of
-automated and reliable processing.
+## Scripts
 
-Ids and Arns of components copied from the source instance will be re-mapped to
-their corresponding components in the new instance, including:
+| Script | Purpose |
+|--------|---------|
+| `connect_backup` | Export a live Amazon Connect instance to local files |
+| `connect_plan` | Compare source backup vs target instance, produce a restore plan |
+| `connect_restore` | Apply the plan — create/update components on the target instance |
+| `connect_validate` | Verify the restored instance matches the backup (DR acceptance gate) |
 
-- Instance (pre-existing)
-- Lambda functions (pre-deployed)
-- Lex bots (Classic) (pre-deployed)
-- Prompts (pre-uploaded)
-- Hours of operations
-- Queues (STANDARD type only)
-- Routing profiles
+## Quick Start
+
+```bash
+# 1. Back up the source instance
+connect_backup -p source-profile source-instance
+
+# 2. Back up the (empty/warm-standby) target instance
+connect_backup -p target-profile target-instance
+
+# 3. Plan the restore
+connect_plan source-instance target-instance helper
+
+# 4. Dry run (verify what will change)
+connect_restore -d helper
+
+# 5. Execute the restore
+connect_restore helper
+
+# 6. Validate everything
+connect_validate -m full -p target-profile source-instance
+```
+
+## What Gets Backed Up and Restored
+
+IDs and ARNs are re-mapped automatically during restore:
+
+- Instance attributes and storage configs
+- Hours of operations (including overrides)
+- Queues (STANDARD type) with quick connect associations
+- Routing profiles with queue associations
+- Security profiles with permissions
+- User hierarchy structure and groups
+- Users with routing/security profile assignments
+- Quick connects
 - Contact flow modules
 - Contact flows
-
-The following components are not copied by Amazon-Connect-Copy (to avoid any impact on
-other contact centres that may happen to be using the same target instance):
-
-- Users (agents) related settings, statuses and the hierarchy
-- Security profiles
-- Phone numbers
-  - Inbound Contact flow/IVR mappings
-  - Outbound caller ID number for queues
-- Quick connects
-- Agent queues
-- Settings for existing standard queues
-  - Note: Settings for new standard queues will still be copied
-- Historical metrics and reports
-- Contact Trace Records (CTRs)
-- Custom vocabularies
-- Rules for Contact lens and Third-party integration
-
-Amazon-Connect-Copy was designed for deployment across environments
-(e.g., from non-prod to prod).
-Considering the target instance may accommodate multiple contact centres,
-Amazon-Connect-Copy does not remove any target instance components which are
-not found in the source instance. If there are multiple contact centres sharing
-the same Amazon Connect instance, it is a good practice to prefix contact centre
-specific components with their individual Contact Centre Codes (CCCs).
-
-A note to developers: To contribute, please read [CONTRIBUTING.md](./CONTRIBUTING.md) first. We will accept PRs on the *development* branch only. Thank you.
+- Phone numbers (flow associations)
+- Agent statuses
+- Predefined attributes
+- Task templates
+- Evaluation forms
+- Rules
+- Views
+- Vocabularies
+- Data tables
+- Email addresses
+- Cases (domains, fields, layouts, templates)
+- Outbound campaigns
+- External dependencies manifest (Lambda, Lex V2, Lex Classic)
 
 ## Installation
 
-- Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html).
-  - Recommend installing the latest version of AWS CLI (2.9.4 or higher).
-- Install [jq](https://stedolan.github.io/jq/) (if not already installed on your platform).
-  - Require `jq` version 1.6 or higher.
-- Copy `bin/*` to your Shell search path (e.g., `cp bin/* /usr/local/bin/`).
+1. Install [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) (2.9.4 or higher).
+2. Install [jq](https://stedolan.github.io/jq/) (1.6 or higher).
+3. Copy `bin/*` to your shell search path:
+   ```bash
+   cp bin/* /usr/local/bin/
+   ```
 
-## Example
+## Legacy Name Aliases
 
-**Please replace names in the example with names specific to your use case.**
+These scripts were previously named `connect_save`, `connect_diff`, `connect_copy`.
+If you have existing automation using the old names, create aliases:
 
-```
-connect_save -p source-profile -c CCC source-connect-alias
-connect_save -p target-profile -c CCC target-connect-alias
-connect_diff source-connect-alias target-connect-alias helper
-# Dry run
-connect_copy -d helper
-# Real run
-connect_copy helper
+```bash
+alias connect_save='connect_backup'
+alias connect_diff='connect_plan'
+alias connect_copy='connect_restore'
 ```
 
-In this example:
-- We copy from instance `source-connect-alias` to instance `target-connect-alias`.
-- Credentials for the source and target instances are in AWS profiles
-  `source-profile` and `target-profile` respectively.
-- You may use the same profile for `source-profile` and `target-profile`,
-  as long as that profile allows access to both the source and the target instances
-  (typically when they are in the same AWS account).
-- Only contact flows and modules with names prefixed by the `CCC`
-  Contact Centre Code will be copied to the target instance.
-- Differences of the two instances (including profile specifications)
-  will be saved in directory `helper`.
+Or symlinks:
 
-## Copying process
+```bash
+ln -s /usr/local/bin/connect_backup /usr/local/bin/connect_save
+ln -s /usr/local/bin/connect_plan /usr/local/bin/connect_diff
+ln -s /usr/local/bin/connect_restore /usr/local/bin/connect_copy
+```
 
-Note: All names in Amazon Connect are case sensitive.
+## Validation Modes
 
-### Pre-steps
+```bash
+# Local only — validate saved JSON files, no AWS calls
+connect_validate -m local source-instance
 
-- Make sure no one else is making changes to either the source or the
-  target instances, or any Lambda functions or Lex bots (Classic) they integrate with.
-- Deploy all Lambda functions required by the target instance.
-- Build all Lex bots (Classic) required by the target instance.
-- Upload all required prompts to the target instance.
-  - The prompt names need to be *exactly* the same as their counterparts
-    in the source instance.
-- For an incremental instance update with contact flow or module **name changes**,
-  before the copying please manually change the corresponding flow or module names in
-  the *target* instance. Otherwise, contact flows and modules with new names will
-  be created in the target instance, and those with old names will be left untouched.
+# Live — compare backup against live instance via AWS APIs
+connect_validate -m live -p profile source-instance
 
-### Copying
+# Full — local + live (DR acceptance mode)
+connect_validate -m full -p profile source-instance
 
-- Set up [named profiles](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-profiles.html) for AWS CLI access to Amazon Connect.
-  - `<source_profile>` for the source instance
-  - `<target_profile>` for the target instance
-  - This step is optional if your default profile already has access to both
-    the source and the target instances. If not sure, skip this step for now.
-    You only need to set up the profiles if `connect_save` fail due to a permission error.
-- `cd` to an empty working directory (e.g., `md <dir>; cd <dir>`).
-- Optionally, run `connect_save` with no arguments to show the help message:
-  ```
-  Usage: connect_save [-?fsev] [-p aws_profile] [-c contact_flow_prefix] [-G ignore_prefix] instance_alias
-      Retrieve components from an Amazon Connect instance into plain files
+# Smoke — full + functional tests (starts a test chat contact)
+connect_validate -m smoke -p profile source-instance
 
-      instance_alias          Alias of the Connect instance (or path to the directory to save, with the alias being the basename)
-      -f                      Force removal of existing instance_alias directory
-      -s                      Skip unpublished contact flow modules and contact flows with an error (instead of failing)
-      -e                      Proceed even when the system may not encode Extended ASCII characters properly
-      -v                      Show version of this script
-      -p profile              AWS Profile to use
-      -c contact_flow_prefix  Prefix of Contact Flows and Modules to be copied (all others will be ignored) - Default is to copy all
-      -G ignore_prefix        Ignore hours, queues, routing profiles, flows or modules with names prefixed with ignore_prefix
-      -C codepage             Override the auto-detected codepage (e.g., use '-C CP1252' for Gitbash ANSI if experiencing encoding issues)
-      -?                      Help
-  ```
-  - `<instance_alias>` can be a directory path.
-  - `<instance_alias>.log` will be produced by `connect_save`.
-- Run `connect_save -p <source_profile> -c <contact_flow_prefix> <source_instance_alias>` .
-- Run `connect_save -p <target_profile> -c <contact_flow_prefix> <target_instance_alias>` .
-- Optionally, run `connect_diff` with no arguments to show the help message:
-  ```
-  Usage: connect_diff [-?fev] [-l lambda_prefix_a=lambda_prefix_b] [-b lex_bot_prefix_a=lex_bot_prefix_b] instance_alias_a instance_alias_b helper
-      Based on connect_save result on Amazon Connect instance A and B,
-      find the differences and produce helper files to safely copy components from A to B.
+# JSON output for CI/CD pipelines
+connect_validate -m full -j -p profile source-instance
+```
 
-      instance_alias_a    Alias of the Connect instance A
-      instance_alias_b    Alias of the Connect instance B
-                          (Aliases can be a path to the directory where the instance was saved using connect_save.)
-      helper              Name of the helper directory
-      -f                  Force removal of existing helper directory
-      -e                  Proceed even when the system may not encode Extended ASCII characters properly
-      -v                  Show version of this script
-      -l lambda_prefix_a=lambda_prefix_b
-                          Lambda function name prefixes for instances A and B (if different) to be replaced during copying
-      -b lex_bot_prefix_a=lex_bot_prefix_b
-                          Lex bot (Classic) name prefixes for instances A and B (if different) to be replaced during copying
-      -?                  Help
+## External Dependencies
 
-      Note: This script create files in the helper directory without changing any instance component files.
-  ```
-- Run `connect_diff -l <source_lambda_prefix>=<target_lambda_prefix> -b <source_lex_bot_prefix>=<target_lex_bot_prefix> <source_instance_alias> <target_instance_alias> <helper>` .
-- Optionally, check under the helper directory `<helper>` to find the four helper files:
-  - `helper.new` - components to create
-     (those found in the source but not in the target); You may remove components that you do not want to be created from `helper.new`.
-  - `helper.old` - components to update
-    (those found in the source and also in the target); You may remove components that you do not want to be updated from `helper.old`.
-  - `helper.sed` - SED script to fix references
-    (so target components will not refer to any components in the source)
-  - `helper.var` - variables of the two instances
-    (instance A is the source, and instance B is the target)
-- Optionally, run `connect_copy` with no arguments to show the help message:
-  ```
-  Usage: connect_copy [-?dev] helper
-      Copy Amazon Connect instance A to instance B safely, based on the
-      connect_save and connect_diff results, under the helper directory
-      creating new components in helper.new, updating old components in helper.old,
-      and updating references defined in helper.sed.
+Contact flows reference Lambda functions, Lex bots, and prompts. These are
+**not Amazon Connect resources** — they must be deployed separately before
+restoring the Connect instance.
 
-      helper  Name of the helper directory
-      -d      Dry run - Run through the script but not updating the target instance
-      -e      Proceed even when the system may not encode Extended ASCII characters properly
-      -v      Show version of this script
-      -?      Help
-  ```
-- Optionally, verify the helper by dry-running `connect_copy -d <helper>` .
-  - Check if the proposed changes are as what you would expect from the output.
-  - AWS CLI commands to execute can be found in `<helper>.log` for your reference.
-  - Please do not run the log file as an executable. Run `connect_copy`
-    without `-d` (dry-run) to perform the actual copying.
-- Run `connect_copy <helper>` .
-  - Verify if the target instance contains all source instance components
-    of the latest version, with all internal references, Lambda invocations and Lex bot (Classic) input
-    properly adjusted.
+`connect_backup` produces an `external_dependencies.json` manifest listing
+every Lambda ARN, Lex V2 bot, and Lex Classic bot referenced by your flows.
+Use this manifest to ensure dependencies exist in the target account before
+running `connect_restore`.
 
-### Post-steps
+`connect_validate` checks that all external dependencies are reachable
+(Layer 0 of the validation suite). A missing Lambda means the instance
+will fail on live calls.
 
-- Login to Amazon Connect target instance.
-- Open Phone numbers.
-  - Check Contact flow/IVR of all phone numbers.
-  - If required, re-map phone numbers to the new Inbound Contact flows/IVR.
-- Open Queues.
-  - For new outbound queues created, set these if required:
-    - Outbound caller ID name
-    - Outbound caller ID number
-    - Outbound whisper flow
+## DR Workflow
 
-## Backup an Amazon Connect instance using Amazon-Connect-Copy
-
-You may restore an Amazon Connect instance from a previous backup copy saved by `connect_save`.
-
-Example:
-- Save a backup copy of the Amazon Connect instance.
-  ```
-  connect_save -p <profile> <backup_dir>/<connect_instance_alias>
-  ```
-- Restore the same instance from the backup copy.
-  - Save the current copy (the one to be restored).
-    ```
-    connect_save -p <profile> <working_dir>/<connect_instance_alias>
-    ```
-  - Diff the current copy with the backup copy.
-    ```
-    connect_diff <backup_dir>/<connect_instance_alias> <working_dir>/<connect_instance_alias> <helper_dir>
-    ```
-  - Optionally, dry run to verify restoration changes.
-    ```
-    connect_copy -d <helper_dir>
-    ```
-  - Restore the instance.
-    ```
-    connect_copy <helper_dir>
-    ```
+See [DR_VALIDATION_SPEC.md](./DR_VALIDATION_SPEC.md) for the full specification
+of what "restored and ready for traffic" means — 18 validation layers covering
+every resource type.
 
 ## Useful Tips
 
-- DO NOT reuse the *target* instance directory and the *helper* directory.
-  Remove these two directories after copying.
-  - If you want to keep a backup of the target instance after copying,
-    run `connect_save` again on the target instance.
-- This script has been tested with AWS CLI 2.9.4, which supports the latest
-  Amazon Connect features, including Contact Flow Modules.
-  (Even your instances may not be using all latest Amazon Connect features,
-  the script will check them and therefore require the latest AWS CLI.)
-- Make sure both the source instance and the target instance remain unaltered
-  by anyone during the entire copying process (save, diff and copy).
-- `connect_diff` only creates the helper directory and will not change anything
-  in the source and the target instance directories.
-- `connect_copy` will change files in the helper directory, and when in
-  non-dry-run mode, will change the target instance directory as well.
-  i.e., `connect_copy` is not idempotent to the target and helper directory.
-- `connect_diff` and `connect_copy` do not change the source instance directory,
-  so the source can serve as a backup or be used to copy to multiple target instances.
-- If relative paths are specified in instance aliases, make sure you are running
-  `connect_diff` and `connect_copy` from the same directory, so that `connect_copy`
-  will resolve the relative paths correctly.
-- The Amazon-Connect-Copy script does not affect any instance-specific settings outside of
-  the Amazon Connect console, such as
-  [Amazon Connect service quotas](https://docs.aws.amazon.com/connect/latest/adminguide/amazon-connect-service-limits.html).
-- For Hours of operations, contact flows, and contact flow modules, Description is required in the target instance. If the Description is missing in the source instance, the component name will be used as Description in the target instance in the copying process. (For other component types, Description is optional.)
-- The Amazon-Connect-Copy script requires the following actions to be allowed. Please configure your AWS Profile with a role authorised to perform these actions:
-  ```
-  connect:AssociateBot
-  connect:AssociateLambdaFunction
-  connect:AssociateLexBot
-  connect:AssociateQueueQuickConnects
-  connect:AssociateRoutingProfileQueues
-  connect:CreateContactFlow
-  connect:CreateContactFlowModule
-  connect:CreateHoursOfOperation
-  connect:CreateQueue
-  connect:CreateQuickConnect
-  connect:CreateRoutingProfile
-  connect:DeleteContactFlow
-  connect:DeleteContactFlowModule
-  connect:DeleteHoursOfOperation
-  connect:DeleteQuickConnect
-  connect:DescribeContactFlow
-  connect:DescribeContactFlowModule
-  connect:DescribeHoursOfOperation
-  connect:DescribeQueue
-  connect:DescribeQuickConnect
-  connect:DescribeRoutingProfile
-  connect:DisassociateRoutingProfileQueues
-  connect:ListContactFlowModules
-  connect:ListContactFlows
-  connect:ListHoursOfOperations
-  connect:ListInstances
-  connect:ListPhoneNumbers
-  connect:ListPrompts
-  connect:ListQueueQuickConnects
-  connect:ListQueues
-  connect:ListQuickConnects
-  connect:ListRoutingProfileQueues
-  connect:ListRoutingProfiles
-  connect:UpdateContactFlowContent
-  connect:UpdateContactFlowModuleContent
-  connect:UpdateHoursOfOperation
-  connect:UpdateQueueHoursOfOperation
-  connect:UpdateQueueOutboundCallerConfig
-  connect:UpdateQuickConnectConfig
-  connect:UpdateRoutingProfileConcurrency
-  connect:UpdateRoutingProfileDefaultOutboundQueue
-  ```
+- The target Amazon Connect instance **must already exist and be ACTIVE** before
+  running `connect_restore`. The script verifies this and aborts if the instance
+  is not reachable. Things you must set up manually on the target:
+  - Instance creation (console or API)
+  - Identity provider / SSO configuration
+  - Telephony (claim phone numbers or use Global Resiliency)
+  - Domain verification for email (if used)
+  - KMS key configuration (if using customer-managed keys)
+- Do not reuse the target instance directory or helper directory between runs.
+  Remove them after restoring.
+- Both instances must remain unaltered during the entire process (backup, plan, restore).
+- `connect_plan` only creates the helper directory — it never modifies instance files.
+- `connect_restore` modifies the helper directory and (in non-dry-run mode) the target instance.
+- If relative paths are used, run `connect_plan` and `connect_restore` from the same directory.
+- All names in Amazon Connect are case sensitive.
+
+## Required IAM Permissions
+
+The restore profile needs these Connect actions:
+
+```
+connect:AssociateBot
+connect:AssociateLambdaFunction
+connect:AssociateLexBot
+connect:AssociateQueueQuickConnects
+connect:AssociateRoutingProfileQueues
+connect:CreateContactFlow
+connect:CreateContactFlowModule
+connect:CreateHoursOfOperation
+connect:CreateQueue
+connect:CreateQuickConnect
+connect:CreateRoutingProfile
+connect:DeleteContactFlow
+connect:DeleteContactFlowModule
+connect:DeleteHoursOfOperation
+connect:DeleteQuickConnect
+connect:DescribeContactFlow
+connect:DescribeContactFlowModule
+connect:DescribeHoursOfOperation
+connect:DescribeQueue
+connect:DescribeQuickConnect
+connect:DescribeRoutingProfile
+connect:DisassociateRoutingProfileQueues
+connect:ListContactFlowModules
+connect:ListContactFlows
+connect:ListHoursOfOperations
+connect:ListInstances
+connect:ListPhoneNumbers
+connect:ListPrompts
+connect:ListQueueQuickConnects
+connect:ListQueues
+connect:ListQuickConnects
+connect:ListRoutingProfileQueues
+connect:ListRoutingProfiles
+connect:UpdateContactFlowContent
+connect:UpdateContactFlowModuleContent
+connect:UpdateHoursOfOperation
+connect:UpdateQueueHoursOfOperation
+connect:UpdateQueueOutboundCallerConfig
+connect:UpdateQuickConnectConfig
+connect:UpdateRoutingProfileConcurrency
+connect:UpdateRoutingProfileDefaultOutboundQueue
+```
+
+The validate profile needs read-only access: `connect:Describe*`, `connect:List*`,
+`connect:Search*`, plus `lambda:GetFunction`, `lambda:GetPolicy`,
+`lex:DescribeBot`, `lex:DescribeBotAlias`.
+
+## Contributing
+
+Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *development* branch only.
+
+## Status: Work in Progress
+
+This is a v2.0.0 rewrite of the original Amazon-Connect-Copy tool, refactored
+for Disaster Recovery use cases. The following work remains:
+
+### To Do
+
+- [ ] **Live testing** — Run against a real Amazon Connect instance to validate
+  API response handling, edge cases, and permission requirements
+- [ ] **Companion deps tool** (`connect_deps_backup` / `connect_deps_restore`) —
+  Back up and restore Lambda function code, Lex bot definitions, and prompt
+  audio files. Without this, a restored instance has correct config but broken
+  flows. See DR_VALIDATION_SPEC.md for the full spec.
+- [ ] **RELEASE.md update** — Document the v2.0.0 changes (rename, modular
+  structure, DR validation suite, new resource types)
+- [ ] **CI/CD pipeline integration** — Wire validate JSON output into automated
+  DR runbooks to gate DNS failover decisions
+- [ ] **Integration test harness** — Fixture-based test that runs the full
+  backup → plan → restore → validate pipeline without a live instance
+
+### Known Gaps
+
+- `connect_restore` sections for Cases and Campaigns log manual actions rather
+  than automating (these require external service setup)
+- Flow content comparison in `connect_validate` (Layers 9.3 / 10.4) uses
+  existence checks only — full normalized content diff is not yet implemented
+- `connect_plan` does not yet modularize into lib/ (it's 900 lines, file-only,
+  lower priority)

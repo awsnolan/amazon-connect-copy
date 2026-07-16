@@ -1,0 +1,175 @@
+#!/bin/bash
+
+############################################################
+#
+# connect_backup — Back up an Amazon Connect instance to local files
+#
+
+VERSION=2.0.0
+SCRIPT_VERSION="$(basename $0) $VERSION"
+
+LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
+. "$LIB_DIR/common.sh"
+
+USAGE=$(cat <<EOD
+Usage: $(basename $0) [-?fsev] [-p aws_profile] [-c contact_flow_prefix] [-G ignore_prefix] [--only sections] [--skip sections] instance_alias
+    Back up components from an Amazon Connect instance into plain files
+
+    instance_alias          Alias of the Connect instance (or path to the directory to save, with the alias being the basename)
+    -f                      Force removal of existing instance_alias directory
+    -s                      Skip unpublished contact flow modules and contact flows with an error (instead of failing)
+    -e                      Proceed even when the system may not encode Extended ASCII characters properly
+    -v                      Show version of this script
+    -p profile              AWS Profile to use
+    -c contact_flow_prefix  Prefix of Contact Flows and Modules to be copied (all others will be ignored) - Default is to copy all
+    -G ignore_prefix        Ignore hours, queues, routing profiles, flows or modules with names prefixed with ignore_prefix
+    -C codepage             Override the auto-detected codepage (e.g., use '-C CP1252' for Gitbash ANSI if experiencing encoding issues)
+    --only sections         Run only these sections (comma-separated: instance,users,routing,features,supporting,channels,external)
+    --skip sections         Skip these sections (comma-separated)
+    -?                      Help
+
+    Sections: instance, users, routing, features, supporting, channels, external
+EOD
+)
+
+# AWS CLI needs to output JSON
+export AWS_DEFAULT_OUTPUT=json
+aws_cli_encoding=UTF-8
+
+# Override aws_connect to use backup variant
+aws_connect() { aws_connect_backup "$@"; }
+
+############################################################
+# Argument parsing
+############################################################
+
+forced=
+skip_cf_errors=
+ignore_improper_extended_ascii=
+ignore_prefix=
+jq_prefix_filter=
+jq_prefix_filter_text=
+eval $(locale -k LC_CTYPE 2>/dev/null | grep charmap)
+codepage=${charmap:-$aws_cli_encoding}
+codepage=${codepage##*.}
+ONLY_SECTIONS=
+SKIP_SECTIONS=
+
+# Handle --only and --skip before getopts
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --only) ONLY_SECTIONS="${2//,/ }"; shift 2;;
+    --skip) SKIP_SECTIONS="${2//,/ }"; shift 2;;
+    *)      args+=("$1"); shift;;
+    esac
+done
+set -- "${args[@]}"
+
+while getopts "?fsevp:c:G:C:" arg; do
+    case "$arg" in
+    f)  forced=on;;
+    s)  skip_cf_errors=on;;
+    e)  ignore_improper_extended_ascii=on;;
+    v)  version;;
+    p)  profile=$OPTARG;;
+    c)  contact_flow_prefix=$OPTARG;;
+    G)  ignore_prefix=$OPTARG
+        jq_prefix_filter=" | select(.Name | test(\"^($ignore_prefix)\") | not)"
+        jq_prefix_filter_text=" excluding those with names prefixed with \"$ignore_prefix\""
+        ;;
+    C)  codepage=$OPTARG;;
+    *)  usage;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Codepage filter override
+if [ -n "$codepage" ] && [ "$codepage" != "$aws_cli_encoding" ]; then
+    aws_cli_out_filter() {
+        cat > $TEMPOF
+        iconv -f $codepage -t $aws_cli_encoding $TEMPOF 2>/dev/null
+        test $? -eq 0 || cat $TEMPOF
+    }
+fi
+
+check_encoding
+
+instance_alias_dir=$1
+instance_alias=$(basename "$instance_alias_dir")
+profile=${profile:-$2}
+profile_flag=${profile:+ --profile $profile}
+contact_flow_prefix=${contact_flow_prefix:-$3}
+contact_flow_prefix_filter=${contact_flow_prefix:+" | select(.Name | test(\"^($contact_flow_prefix|Default ).*\"))"}
+contact_flow_prefix_text="${contact_flow_prefix:+ with names prefixed with \"$contact_flow_prefix\" or Default}"
+
+if [ -z "$instance_alias_dir" ]; then
+    usage
+fi
+
+############################################################
+# Setup
+############################################################
+
+if [ -n "$forced" ] && [ -d "$instance_alias_dir" ]; then
+    rm -rf "$instance_alias_dir"
+fi
+
+if [ -d "$instance_alias_dir" ]; then
+    error "Directory \"$instance_alias_dir\" already exists. Use -f to force removal."
+fi
+
+# Temp files
+TEMPFILE=$(mktemp)
+TEMPFILE2=${TEMPFILE}_2
+TEMPCF=${TEMPFILE}_cf
+TEMPOF=${TEMPFILE}_of
+TEMPERR=${TEMPFILE}_err
+trap 'rm -f $TEMPFILE $TEMPFILE2 $TEMPCF $TEMPOF $TEMPERR' EXIT
+touch $TEMPFILE $TEMPFILE2 $TEMPCF $TEMPOF $TEMPERR
+
+maxitems=999
+
+if [ -n "$skip_cf_errors" ]; then
+    echo "Skip unpublished contact flow modules and contact flows with an error."
+fi
+
+############################################################
+# Instance bootstrap (always runs — needed by all sections)
+############################################################
+
+mkdir -p "$instance_alias_dir"
+aws_cli_log="${instance_alias_dir%/}.log"
+> "$aws_cli_log"
+
+aws_connect list-instances --max-items $maxitems > $TEMPFILE || error $LINENO
+
+instance_id=$(cat $TEMPFILE |
+jq -r ".InstanceSummaryList[] | select(.InstanceAlias == \"$instance_alias\")" |
+tee "$instance_alias_dir/instance.json" |
+jq -r ".Id" |
+dos2unix)
+echo "Instance ID: $instance_id"
+
+test -n "$instance_id" || error "Instance $instance_alias does not exist"
+
+cat "$instance_alias_dir/instance.json" |
+grep : |
+sed -e's/ *"/instance_/' -e's/": /=/' -e's/,$//' > "$instance_alias_dir/instance.var"
+echo "aws_Profile=\"$profile\"" >> "$instance_alias_dir/instance.var"
+echo "instance_contact_flow_prefix=\"$contact_flow_prefix\"" >> "$instance_alias_dir/instance.var"
+
+############################################################
+# Run sections
+############################################################
+
+run_section "instance"    "$LIB_DIR/backup/instance.sh"
+run_section "users"       "$LIB_DIR/backup/users.sh"
+run_section "routing"     "$LIB_DIR/backup/routing.sh"
+run_section "features"    "$LIB_DIR/backup/features.sh"
+run_section "supporting"  "$LIB_DIR/backup/supporting.sh"
+run_section "channels"    "$LIB_DIR/backup/channels.sh"
+run_section "external"    "$LIB_DIR/backup/external.sh"
+
+echo
+echo "All done"
