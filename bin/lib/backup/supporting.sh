@@ -130,7 +130,11 @@ if [ -s $TEMPFILE ]; then
         aws_connect describe-view \
             --instance-id $instance_id \
             --view-id $view_id \
-            > "$instance_alias_dir/view_$view_name_encoded.json" || error $LINENO
+            > "$instance_alias_dir/view_$view_name_encoded.json" 2>/dev/null
+        if [ ! -s "$instance_alias_dir/view_$view_name_encoded.json" ]; then
+            echo "  (AWS-managed view — skipped)"
+            rm -f "$instance_alias_dir/view_$view_name_encoded.json"
+        fi
     done
     test $? -eq 0 || error
 else
