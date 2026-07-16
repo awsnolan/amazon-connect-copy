@@ -23,7 +23,7 @@ aws connectcases list-domains \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".domains[]" |
+    jq -r ".domains // [] | .[]" |
     jq -s "sort_by(.name) | .[]" |
     tee "$instance_alias_dir/cases_domains.json" |
     echo -e "\n$(jq -s "length") Cases domains listed in \"$instance_alias_dir/cases_domains.json\""
@@ -66,7 +66,7 @@ aws connect-campaigns-v2 list-campaigns \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".campaignSummaryList[]" |
+    jq -r ".campaignSummaryList // [] | .[]" |
     jq -s "sort_by(.name) | .[]" |
     tee "$instance_alias_dir/campaigns.json" |
     echo -e "\n$(jq -s "length") outbound campaigns listed in \"$instance_alias_dir/campaigns.json\""

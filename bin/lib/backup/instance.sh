@@ -61,7 +61,7 @@ aws_connect list-integration-associations \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".IntegrationAssociationSummaryList[]" |
+    jq -r ".IntegrationAssociationSummaryList // [] | .[]" |
     jq -s "sort_by(.IntegrationAssociationId) | .[]" |
     tee "$instance_alias_dir/integrations.json" |
     echo -e "\n$(jq -s "length") integration associations listed in \"$instance_alias_dir/integrations.json\""
@@ -81,7 +81,7 @@ aws_connect list-approved-origins \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".Origins[]" |
+    jq -r ".Origins // [] | .[]" |
     jq -s "sort | .[]" |
     tee "$instance_alias_dir/approved_origins.json" |
     echo -e "\n$(jq -s "length") approved origins listed in \"$instance_alias_dir/approved_origins.json\""
@@ -101,7 +101,7 @@ aws_connect list-security-keys \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".SecurityKeysList[]" |
+    jq -r ".SecurityKeysList // [] | .[]" |
     jq -s "sort_by(.AssociationId) | .[]" |
     tee "$instance_alias_dir/security_keys.json" |
     echo -e "\n$(jq -s "length") security keys listed in \"$instance_alias_dir/security_keys.json\""
@@ -121,7 +121,7 @@ aws_connect list-lambda-functions \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".LambdaFunctions[]" |
+    jq -r ".LambdaFunctions // [] | .[]" |
     jq -s "sort | .[]" |
     tee "$instance_alias_dir/lambda_associations.json" |
     echo -e "\n$(jq -s "length") Lambda function associations listed in \"$instance_alias_dir/lambda_associations.json\""

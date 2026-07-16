@@ -108,7 +108,7 @@ aws_connect list-predefined-attributes \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".PredefinedAttributeSummaryList[]" |
+    jq -r ".PredefinedAttributeSummaryList // [] | .[]" |
     jq -s "sort_by(.Name) | .[]" |
     tee "$instance_alias_dir/predefinedattributes.json" |
     echo -e "\n$(jq -s "length") predefined attributes listed in \"$instance_alias_dir/predefinedattributes.json\""
