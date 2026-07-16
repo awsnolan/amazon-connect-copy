@@ -142,7 +142,7 @@ Resources:
             - Name: FallbackIntent
               Description: Default fallback
               ParentIntentSignature: AMAZON.FallbackIntent
-      Tags:
+      TestBotAliasTags:
         - Key: Project
           Value: dr-toolkit-test
 
@@ -184,7 +184,7 @@ Resources:
       BotId: !Ref MainMenuBot
       BotAliasName: live
       BotVersion: !GetAtt MainMenuBotVersion.BotVersion
-      Tags:
+      BotAliasTags:
         - Key: Project
           Value: dr-toolkit-test
 

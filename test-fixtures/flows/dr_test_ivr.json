@@ -1,6 +1,21 @@
 {
   "Version": "2019-10-30",
   "StartAction": "start-check-hours",
+  "Metadata": {
+    "entryPointPosition": {"x": 20, "y": 20},
+    "ActionMetadata": {
+      "start-check-hours": {"position": {"x": 120, "y": 20}},
+      "branch-hours": {"position": {"x": 400, "y": 20}},
+      "after-hours-disconnect": {"position": {"x": 700, "y": 300}},
+      "lookup-customer": {"position": {"x": 400, "y": 200}},
+      "set-attributes": {"position": {"x": 700, "y": 20}},
+      "lex-main-menu": {"position": {"x": 1000, "y": 20}},
+      "set-queue-basic": {"position": {"x": 1300, "y": 20}},
+      "set-queue-inbound": {"position": {"x": 1300, "y": 200}},
+      "transfer-to-queue": {"position": {"x": 1600, "y": 100}},
+      "disconnect-end": {"position": {"x": 1900, "y": 100}}
+    }
+  },
   "Actions": [
     {
       "Identifier": "start-check-hours",
@@ -12,7 +27,7 @@
       "Transitions": {
         "NextAction": "branch-hours",
         "Errors": [
-          {"NextAction": "transfer-basic-queue", "ErrorType": "NoMatchingError"}
+          {"NextAction": "set-queue-basic", "ErrorType": "NoMatchingError"}
         ]
       }
     },
@@ -31,7 +46,7 @@
           }
         ],
         "Errors": [
-          {"NextAction": "transfer-basic-queue", "ErrorType": "NoMatchingCondition"}
+          {"NextAction": "set-queue-basic", "ErrorType": "NoMatchingCondition"}
         ]
       }
     },
@@ -62,7 +77,8 @@
         "Attributes": {
           "CustomerName": "$.External.CustomerName",
           "AccountTier": "$.External.AccountTier"
-        }
+        },
+        "TargetContact": "Current"
       },
       "Transitions": {
         "NextAction": "lex-main-menu",
@@ -75,50 +91,63 @@
       "Identifier": "lex-main-menu",
       "Type": "ConnectParticipantWithLexBot",
       "Parameters": {
+        "Text": "Welcome. To check your balance, say check balance. To speak to an agent, say speak to agent.",
         "LexV2Bot": {
           "AliasArn": "LEX_BOT_ALIAS_ARN"
         }
       },
       "Transitions": {
-        "NextAction": "transfer-basic-queue",
+        "NextAction": "set-queue-basic",
         "Conditions": [
           {
-            "NextAction": "transfer-basic-queue",
+            "NextAction": "set-queue-basic",
             "Condition": {"Operator": "Equals", "Operands": ["CheckBalance"]}
           },
           {
-            "NextAction": "transfer-inbound-queue",
+            "NextAction": "set-queue-inbound",
             "Condition": {"Operator": "Equals", "Operands": ["SpeakToAgent"]}
           }
         ],
         "Errors": [
-          {"NextAction": "transfer-basic-queue", "ErrorType": "NoMatchingCondition"},
-          {"NextAction": "transfer-basic-queue", "ErrorType": "NoMatchingError"}
+          {"NextAction": "set-queue-basic", "ErrorType": "NoMatchingCondition"},
+          {"NextAction": "set-queue-basic", "ErrorType": "NoMatchingError"}
         ]
       }
     },
     {
-      "Identifier": "transfer-basic-queue",
-      "Type": "TransferToQueue",
+      "Identifier": "set-queue-basic",
+      "Type": "UpdateContactTargetQueue",
       "Parameters": {
         "QueueId": "BASIC_QUEUE_ARN"
       },
       "Transitions": {
-        "NextAction": "disconnect-end",
+        "NextAction": "transfer-to-queue",
         "Errors": [
           {"NextAction": "disconnect-end", "ErrorType": "NoMatchingError"}
         ]
       }
     },
     {
-      "Identifier": "transfer-inbound-queue",
-      "Type": "TransferToQueue",
+      "Identifier": "set-queue-inbound",
+      "Type": "UpdateContactTargetQueue",
       "Parameters": {
         "QueueId": "INBOUND_RECK_QUEUE_ARN"
       },
       "Transitions": {
+        "NextAction": "transfer-to-queue",
+        "Errors": [
+          {"NextAction": "disconnect-end", "ErrorType": "NoMatchingError"}
+        ]
+      }
+    },
+    {
+      "Identifier": "transfer-to-queue",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {
         "NextAction": "disconnect-end",
         "Errors": [
+          {"NextAction": "disconnect-end", "ErrorType": "QueueAtCapacity"},
           {"NextAction": "disconnect-end", "ErrorType": "NoMatchingError"}
         ]
       }

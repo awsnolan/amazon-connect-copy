@@ -36,6 +36,7 @@ sam deploy \
     --template-file "$SCRIPT_DIR/.aws-sam/build/template.yaml" \
     --stack-name "$STACK_NAME" \
     --region "$REGION" \
+    --resolve-s3 \
     --capabilities CAPABILITY_NAMED_IAM \
     --parameter-overrides "ConnectInstanceArn=$CONNECT_INSTANCE_ARN" \
     --no-confirm-changeset \
