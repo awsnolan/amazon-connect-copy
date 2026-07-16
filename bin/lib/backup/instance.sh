@@ -121,10 +121,10 @@ aws_connect list-lambda-functions \
 
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
-    jq -r ".LambdaFunctions // [] | .[]" |
-    jq -s "sort | .[]" |
+    jq -r '.LambdaFunctions // [] | sort | .[]' |
+    jq -Rs '[split("\n") | .[] | select(. != "")]' |
     tee "$instance_alias_dir/lambda_associations.json" |
-    echo -e "\n$(jq -s "length") Lambda function associations listed in \"$instance_alias_dir/lambda_associations.json\""
+    echo -e "\n$(jq 'length' "$instance_alias_dir/lambda_associations.json") Lambda function associations listed in \"$instance_alias_dir/lambda_associations.json\""
 else
     echo "No Lambda function associations found"
     echo "[]" > "$instance_alias_dir/lambda_associations.json"
