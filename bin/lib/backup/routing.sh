@@ -30,10 +30,10 @@ dos2unix |
 while read prompt_id prompt_name; do
     [ -z "$prompt_id" ] && continue
     prompt_name_encoded=$(path_encode "$prompt_name")
-    aws_connect describe-prompt \
+    describe_or_skip "$prompt_name" "$instance_alias_dir/prompt_$prompt_name_encoded.json" \
+        aws_connect describe-prompt \
         --instance-id $instance_id \
-        --prompt-id $prompt_id \
-        > "$instance_alias_dir/prompt_$prompt_name_encoded.json" 2>/dev/null || true
+        --prompt-id $prompt_id || true
 done
 test $? -eq 0 || error
 echo "Prompt details saved"

@@ -203,6 +203,29 @@ add_json_attribute() {
 }
 
 ###############################################################################
+# Resilient describe wrapper (used by backup loops)
+#
+# Usage: describe_or_skip "label" output_file aws_connect describe-foo --args
+#   - If the describe succeeds and output is non-empty: returns 0
+#   - If the describe fails (ResourceNotFound, AccessDenied): prints skip, returns 1
+#   - Caller decides whether to treat as fatal or continue
+###############################################################################
+
+describe_or_skip() {
+    local label="$1"
+    local output_file="$2"
+    shift 2
+    "$@" > "$output_file" 2>/dev/null
+    if [ -s "$output_file" ]; then
+        return 0
+    else
+        echo "  (skipped: $label — not describable or access denied)"
+        rm -f "$output_file"
+        return 1
+    fi
+}
+
+###############################################################################
 # Manual action tracker (used by restore)
 #
 # Appends items to $TEMPMANUAL. Call manual_action "Category" "Description"

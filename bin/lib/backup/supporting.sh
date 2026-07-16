@@ -127,14 +127,10 @@ if [ -s $TEMPFILE ]; then
     while read view_id view_name; do
         echo "Exporting view $view_name"
         view_name_encoded=$(path_encode "$view_name")
-        aws_connect describe-view \
+        describe_or_skip "$view_name" "$instance_alias_dir/view_$view_name_encoded.json" \
+            aws_connect describe-view \
             --instance-id $instance_id \
-            --view-id $view_id \
-            > "$instance_alias_dir/view_$view_name_encoded.json" 2>/dev/null
-        if [ ! -s "$instance_alias_dir/view_$view_name_encoded.json" ]; then
-            echo "  (AWS-managed view — skipped)"
-            rm -f "$instance_alias_dir/view_$view_name_encoded.json"
-        fi
+            --view-id $view_id || true
     done
     test $? -eq 0 || error
 else

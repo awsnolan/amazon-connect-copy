@@ -118,10 +118,10 @@ if [ -s $TEMPFILE ]; then
     while read pa_name; do
         echo "Exporting predefined attribute $pa_name"
         pa_name_encoded=$(path_encode "$pa_name")
-        aws_connect describe-predefined-attribute \
+        describe_or_skip "$pa_name" "$instance_alias_dir/predefinedattribute_$pa_name_encoded.json" \
+            aws_connect describe-predefined-attribute \
             --instance-id $instance_id \
-            --name "$pa_name" \
-            > "$instance_alias_dir/predefinedattribute_$pa_name_encoded.json" || error $LINENO
+            --name "$pa_name" || true
     done
     test $? -eq 0 || error
 else
