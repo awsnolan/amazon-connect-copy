@@ -264,3 +264,7 @@ for Disaster Recovery use cases. The following work remains:
   like Cases, Campaigns, or email, verify the feature is actually enabled on the
   instance. Store the enabled/disabled state so validate and restore can skip
   gracefully rather than failing on API errors for disabled features.
+- `connect_validate --target <instance-id>`: validate a backup directory against a
+  *different* live instance (the DR target). Currently validates against the source
+  instance only. Same comparison logic, just targets API calls at a different
+  instance ID. Required for post-restore DR acceptance testing.

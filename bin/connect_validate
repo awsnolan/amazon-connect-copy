@@ -460,8 +460,9 @@ validate_layer_0() {
             policy=$(aws_lambda get-policy --function-name "$arn" 2>/dev/null)
             if [ -n "$policy" ]; then
                 local has_connect_perm
+                # Policy is a JSON string field; parse and check for connect.amazonaws.com principal
                 has_connect_perm=$(echo "$policy" | jq -r '.Policy' 2>/dev/null | \
-                    jq 'fromjson | .Statement[] | select(.Principal.Service == "connect.amazonaws.com") | .Effect' 2>/dev/null | head -1)
+                    jq -r 'fromjson | .Statement[] | select(.Principal.Service == "connect.amazonaws.com" or .Principal == "connect.amazonaws.com") | .Effect' 2>/dev/null | head -1)
                 if [ "$has_connect_perm" = "Allow" ]; then
                     lambda_perm_pass=$((lambda_perm_pass + 1))
                 else
@@ -750,10 +751,10 @@ validate_layer_1() {
         saved_origins=$(jq -r '.[]? // empty' "$instance_alias_dir/approved_origins.json" 2>/dev/null | sort)
         local live_origins_json
         live_origins_json=$(aws_connect list-approved-origins --instance-id "$instance_id" 2>/dev/null)
-        live_origins=$(echo "$live_origins_json" | jq -r '.Origins[]? // empty' 2>/dev/null | sort)
+        live_origins=$(echo "$live_origins_json" | jq -r '.Origins // [] | .[]' 2>/dev/null | sort)
         if [ "$saved_origins" = "$live_origins" ]; then
-            local origin_count
-            origin_count=$(echo "$saved_origins" | grep -c . 2>/dev/null || echo 0)
+            local origin_count=0
+            [ -n "$saved_origins" ] && origin_count=$(echo "$saved_origins" | wc -l | tr -d ' ')
             pass "1.5" "Approved origins match ($origin_count)"
         else
             fail "1.5" "Approved origins" "Sets differ"
@@ -821,9 +822,9 @@ validate_layer_2() {
             fi
         done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" 2>/dev/null | dos2unix)
         if [ "$local_fail" -eq 0 ]; then
-            pass "2.1" "All hours of operations saved ($hour_count)"
+            pass "2.1a" "All hours of operations saved ($hour_count)"
         else
-            fail "2.1" "Hours of operations" "$local_fail of $hour_count missing detail files"
+            fail "2.1a" "Hours of operations" "$local_fail of $hour_count missing detail files"
         fi
     fi
 
@@ -969,7 +970,7 @@ validate_layer_3() {
             fi
         done
         if [ "$local_ok" -ge "$queue_count" ]; then
-            pass "3.1" "Queue detail files valid ($local_ok)"
+            pass "3.1a" "Queue detail files valid ($local_ok)"
         else
             warn "3.1" "Queue detail files" "$local_ok valid of $queue_count expected"
         fi
@@ -1711,9 +1712,9 @@ validate_layer_9_10() {
             fi
         done
         if [ "$flow_local_fail" -eq 0 ]; then
-            pass "10.1" "Flow content files valid ($flow_local_ok)"
+            pass "10.1a" "Flow content files valid ($flow_local_ok)"
         else
-            fail "10.1" "Flow content" "$flow_local_fail with unresolved StartAction"
+            fail "10.1a" "Flow content" "$flow_local_fail with unresolved StartAction"
         fi
     fi
 
@@ -1820,20 +1821,23 @@ validate_layer_11() {
         local live_target
         live_target=$(echo "$live_pn" | jq -r '.ClaimedPhoneNumberSummary.TargetArn // empty' | dos2unix)
         if [ -n "$live_target" ] && [ "$live_target" != "null" ]; then
-            flow_total=$((flow_total + 1))
-            # Extract flow ID from ARN and verify it exists
-            local flow_id_from_arn
-            flow_id_from_arn=$(echo "$live_target" | sed 's|.*/contact-flow/||')
-            local flow_check
-            flow_check=$(aws_connect describe-contact-flow \
-                --instance-id "$instance_id" \
-                --contact-flow-id "$flow_id_from_arn" 2>/dev/null)
-            if [ -n "$flow_check" ]; then
-                flow_pass=$((flow_pass + 1))
-            else
-                flow_fail=$((flow_fail + 1))
-                [ -z "$JSON_OUTPUT" ] && echo "         → Flow target not found: $pn_number → $live_target" >&2
+            # Only validate if target is a contact-flow ARN (not just the instance ARN)
+            if [[ "$live_target" == *"/contact-flow/"* ]]; then
+                flow_total=$((flow_total + 1))
+                local flow_id_from_arn
+                flow_id_from_arn=$(echo "$live_target" | sed 's|.*/contact-flow/||')
+                local flow_check
+                flow_check=$(aws_connect describe-contact-flow \
+                    --instance-id "$instance_id" \
+                    --contact-flow-id "$flow_id_from_arn" 2>/dev/null)
+                if [ -n "$flow_check" ]; then
+                    flow_pass=$((flow_pass + 1))
+                else
+                    flow_fail=$((flow_fail + 1))
+                    [ -z "$JSON_OUTPUT" ] && echo "         → Flow target not found: $pn_number → $live_target" >&2
+                fi
             fi
+            # If TargetArn is just the instance ARN, no flow is assigned — skip silently
         fi
     done < <(jq -r '.PhoneNumberId + "\t" + .PhoneNumber' "$instance_alias_dir/phonenumbers.json" 2>/dev/null | dos2unix)
 
@@ -2100,28 +2104,48 @@ validate_layer_14() {
 
     # --- 14F: Views ---
     if [ -f "$instance_alias_dir/views.json" ]; then
-        local view_count
-        view_count=$(jq -s 'length' "$instance_alias_dir/views.json" 2>/dev/null)
+        # Only count views that have a saved detail file (AWS-managed views were skipped during backup)
+        local view_count=0
+        while IFS=$'\t' read -r view_id view_name; do
+            [ -z "$view_id" ] && continue
+            local vname_encoded=$(echo "$view_name" | sed 's/ /%20/g')
+            # Check if we have a detail file for this view
+            local has_detail=0
+            for vf in "$instance_alias_dir"/view_*.json; do
+                [ -f "$vf" ] || continue
+                local vf_id=$(jq -r '.View.Id // empty' "$vf" 2>/dev/null | dos2unix)
+                if [ "$vf_id" = "$view_id" ]; then
+                    has_detail=1
+                    break
+                fi
+            done
+            [ "$has_detail" -eq 1 ] && view_count=$((view_count + 1))
+        done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/views.json" 2>/dev/null | dos2unix)
+
         if [ -n "$do_live" ] && [ "$view_count" -gt 0 ]; then
             local view_pass=0 view_fail=0
-            while IFS=$'\t' read -r view_id view_name; do
-                [ -z "$view_id" ] && continue
+            for vf in "$instance_alias_dir"/view_*.json; do
+                [ -f "$vf" ] || continue
+                local vf_id=$(jq -r '.View.Id // empty' "$vf" 2>/dev/null | dos2unix)
+                [ -z "$vf_id" ] && continue
                 local live_view
                 live_view=$(aws_connect describe-view \
-                    --instance-id "$instance_id" --view-id "$view_id" 2>/dev/null)
+                    --instance-id "$instance_id" --view-id "$vf_id" 2>/dev/null)
                 if [ -n "$live_view" ]; then
                     view_pass=$((view_pass + 1))
                 else
                     view_fail=$((view_fail + 1))
                 fi
-            done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/views.json" 2>/dev/null | dos2unix)
+            done
             if [ "$view_fail" -eq 0 ]; then
                 pass "14F.1" "Views exist ($view_pass/$view_count)"
             else
                 fail "14F.1" "Views" "$view_fail of $view_count missing"
             fi
+        elif [ "$view_count" -gt 0 ]; then
+            [ -n "$do_local" ] && pass "14F.1" "Views ($view_count custom views backed up)"
         else
-            [ -n "$do_local" ] && pass "14F.1" "Views manifest ($view_count)"
+            skip "14F.1" "Views" "only AWS-managed views (not backed up)"
         fi
     else
         skip "14F.1" "Views" "not found"
