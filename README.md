@@ -254,3 +254,13 @@ for Disaster Recovery use cases. The following work remains:
   (the live validation loops may not be executing)
 - Layer 11: Phone numbers show "Flow target not found" errors but then reports
   SKIP — logic needs to report WARN or FAIL instead of SKIP when targets are broken
+
+### Backlog (enhancements)
+
+- ASCII colorizer: add unobtrusive single-line ASCII art to designate PASS/FAIL/WARN/SKIP
+  results (green/red/yellow/grey). Opt-in by default, disable with `--no-color` flag.
+  Use standard ANSI escape codes.
+- Feature-enabled checks in `connect_backup`: before attempting to back up resources
+  like Cases, Campaigns, or email, verify the feature is actually enabled on the
+  instance. Store the enabled/disabled state so validate and restore can skip
+  gracefully rather than failing on API errors for disabled features.

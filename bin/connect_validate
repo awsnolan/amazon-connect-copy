@@ -640,10 +640,13 @@ validate_layer_1() {
         fi
         local saved_alias
         saved_alias=$(jq -r '.InstanceAlias // .Alias // empty' "$instance_alias_dir/instance.json" | dos2unix)
-        if [ -n "$saved_alias" ] && [ "$saved_alias" = "$instance_alias" ]; then
-            pass "1.2" "Instance alias matches: $instance_alias"
-        elif [ -n "$saved_alias" ]; then
-            warn "1.2" "Instance alias" "saved=$saved_alias dir=$instance_alias"
+        # Only check alias locally if not also doing live (avoids duplicate output)
+        if [ -z "$do_live" ]; then
+            if [ -n "$saved_alias" ] && [ "$saved_alias" = "$instance_alias" ]; then
+                pass "1.2" "Instance alias matches: $instance_alias"
+            elif [ -n "$saved_alias" ]; then
+                warn "1.2" "Instance alias" "saved=$saved_alias dir=$instance_alias"
+            fi
         fi
     fi
 
@@ -683,7 +686,7 @@ validate_layer_1() {
         local attr_match=0 attr_total=0 attr_mismatch=""
         for attr_type in $attr_types; do
             local saved_val live_val
-            saved_val=$(jq -r "select(.AttributeType == \"$attr_type\") | .Value // empty" \
+            saved_val=$(jq -r "select(.Attribute.AttributeType == \"$attr_type\") | .Attribute.Value // empty" \
                 "$instance_alias_dir/instance_attributes.json" 2>/dev/null | head -1 | dos2unix)
             [ -z "$saved_val" ] && continue
             attr_total=$((attr_total + 1))
@@ -798,7 +801,6 @@ validate_layer_2() {
     # Local: validate each hour detail file exists and is valid JSON
     if [ -n "$do_local" ]; then
         local local_ok=0 local_fail=0
-        jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" 2>/dev/null | dos2unix |
         while IFS=$'\t' read -r hour_id hour_name; do
             [ -z "$hour_id" ] && continue
             # Find detail file by searching for matching HoursOfOperationId
@@ -817,7 +819,7 @@ validate_layer_2() {
             else
                 local_fail=$((local_fail + 1))
             fi
-        done
+        done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" 2>/dev/null | dos2unix)
         if [ "$local_fail" -eq 0 ]; then
             pass "2.1" "All hours of operations saved ($hour_count)"
         else
@@ -832,7 +834,6 @@ validate_layer_2() {
     local config_pass=0 config_fail=0
     local override_pass=0 override_fail=0 override_total=0
 
-    jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r hour_id hour_name; do
         [ -z "$hour_id" ] && continue
 
@@ -915,7 +916,7 @@ validate_layer_2() {
                 [ -z "$JSON_OUTPUT" ] && echo "         → Override count mismatch: $hour_name (saved=$saved_override_count live=$live_override_count)" >&2
             fi
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" 2>/dev/null | dos2unix)
 
     # Report
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
@@ -982,7 +983,6 @@ validate_layer_3() {
     local status_pass=0 status_warn=0
     local qc_pass=0 qc_fail=0 qc_total=0
 
-    jq -r '.Id + "\t" + .Name' "$instance_alias_dir/queues.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r queue_id queue_name; do
         [ -z "$queue_id" ] && continue
 
@@ -1095,7 +1095,7 @@ validate_layer_3() {
                 [ -z "$JSON_OUTPUT" ] && echo "         → QC association mismatch: $queue_name" >&2
             fi
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/queues.json" 2>/dev/null | dos2unix)
 
     # Report queue results
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
@@ -1169,7 +1169,6 @@ validate_layer_4() {
     local media_pass=0 media_fail=0
     local assoc_pass=0 assoc_fail=0 assoc_total=0
 
-    jq -r '.Id + "\t" + .Name' "$instance_alias_dir/routings.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r rp_id rp_name; do
         [ -z "$rp_id" ] && continue
 
@@ -1252,7 +1251,7 @@ validate_layer_4() {
                 [ -z "$JSON_OUTPUT" ] && echo "         → Queue associations mismatch: $rp_name" >&2
             fi
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/routings.json" 2>/dev/null | dos2unix)
 
     # Report
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
@@ -1307,7 +1306,6 @@ validate_layer_5() {
     local exist_pass=0 exist_fail=0
     local perm_pass=0 perm_fail=0
 
-    jq -r '.Id + "\t" + .Name' "$instance_alias_dir/securityprofiles.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r sp_id sp_name; do
         [ -z "$sp_id" ] && continue
 
@@ -1354,7 +1352,7 @@ validate_layer_5() {
                 fi
             fi
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/securityprofiles.json" 2>/dev/null | dos2unix)
 
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
         pass "5.1" "All security profiles exist ($exist_pass/$sp_count)"
@@ -1414,7 +1412,6 @@ validate_layer_6() {
         hg_count=$(jq -s 'length' "$instance_alias_dir/hierarchy_groups.json" 2>/dev/null)
         local hg_pass=0 hg_fail=0
 
-        jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hierarchy_groups.json" 2>/dev/null | dos2unix |
         while IFS=$'\t' read -r hg_id hg_name; do
             [ -z "$hg_id" ] && continue
             local live_hg
@@ -1427,7 +1424,7 @@ validate_layer_6() {
                 hg_fail=$((hg_fail + 1))
                 [ -z "$JSON_OUTPUT" ] && echo "         → Missing group: $hg_name" >&2
             fi
-        done
+        done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hierarchy_groups.json" 2>/dev/null | dos2unix)
 
         if [ "$hg_fail" -eq 0 ] && [ "$hg_pass" -gt 0 ]; then
             pass "6.2" "All hierarchy groups exist ($hg_pass/$hg_count)"
@@ -1465,7 +1462,6 @@ validate_layer_7() {
     local rp_pass=0 rp_fail=0
     local sp_pass=0 sp_fail=0
 
-    jq -r '.Id + "\t" + .Username' "$instance_alias_dir/users.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r user_id user_name; do
         [ -z "$user_id" ] && continue
 
@@ -1509,7 +1505,7 @@ validate_layer_7() {
         else
             sp_fail=$((sp_fail + 1))
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Username' "$instance_alias_dir/users.json" 2>/dev/null | dos2unix)
 
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
         pass "7.1" "All users exist ($exist_pass/$user_count)"
@@ -1555,7 +1551,6 @@ validate_layer_8() {
     local exist_pass=0 exist_fail=0
     local type_pass=0 type_fail=0
 
-    jq -r '.Id + "\t" + .Name' "$instance_alias_dir/quickconnects.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r qc_id qc_name; do
         [ -z "$qc_id" ] && continue
 
@@ -1590,7 +1585,7 @@ validate_layer_8() {
                 [ -z "$JSON_OUTPUT" ] && echo "         → Type mismatch: $qc_name (saved=$saved_type live=$live_type)" >&2
             fi
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/quickconnects.json" 2>/dev/null | dos2unix)
 
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
         pass "8.1" "All quick connects exist ($exist_pass/$qc_count)"
@@ -1640,7 +1635,6 @@ validate_layer_9_10() {
             local mod_exist_pass=0 mod_exist_fail=0
             local mod_status_pass=0 mod_status_fail=0
 
-            jq -r '.Id + "\t" + .Name' "$instance_alias_dir/modules.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r mod_id mod_name; do
                 [ -z "$mod_id" ] && continue
                 local live_mod
@@ -1663,7 +1657,7 @@ validate_layer_9_10() {
                     mod_status_fail=$((mod_status_fail + 1))
                     [ -z "$JSON_OUTPUT" ] && echo "         → Not published: $mod_name (status=$mod_status)" >&2
                 fi
-            done
+            done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/modules.json" 2>/dev/null | dos2unix)
 
             if [ "$mod_exist_fail" -eq 0 ] && [ "$mod_exist_pass" -gt 0 ]; then
                 pass "9.1" "All modules exist ($mod_exist_pass/$mod_count)"
@@ -1729,7 +1723,6 @@ validate_layer_9_10() {
     local flow_active_pass=0 flow_active_fail=0
     local flow_type_pass=0 flow_type_fail=0
 
-    jq -r '.Id + "\t" + .Name + "\t" + (.ContactFlowType // "")' "$instance_alias_dir/flows.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r flow_id flow_name flow_type; do
         [ -z "$flow_id" ] && continue
 
@@ -1765,7 +1758,7 @@ validate_layer_9_10() {
                 [ -z "$JSON_OUTPUT" ] && echo "         → Type mismatch: $flow_name (saved=$flow_type live=$live_type)" >&2
             fi
         fi
-    done
+    done < <(jq -r '.Id + "\t" + .Name + "\t" + (.ContactFlowType // "")' "$instance_alias_dir/flows.json" 2>/dev/null | dos2unix)
 
     if [ "$flow_exist_fail" -eq 0 ] && [ "$flow_exist_pass" -gt 0 ]; then
         pass "10.1" "All flows exist ($flow_exist_pass/$flow_count)"
@@ -1811,7 +1804,6 @@ validate_layer_11() {
     local exist_pass=0 exist_fail=0
     local flow_pass=0 flow_fail=0 flow_total=0
 
-    jq -r '.PhoneNumberId + "\t" + .PhoneNumber' "$instance_alias_dir/phonenumbers.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r pn_id pn_number; do
         [ -z "$pn_id" ] && continue
 
@@ -1843,7 +1835,7 @@ validate_layer_11() {
                 [ -z "$JSON_OUTPUT" ] && echo "         → Flow target not found: $pn_number → $live_target" >&2
             fi
         fi
-    done
+    done < <(jq -r '.PhoneNumberId + "\t" + .PhoneNumber' "$instance_alias_dir/phonenumbers.json" 2>/dev/null | dos2unix)
 
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
         pass "11.1" "All phone numbers exist ($exist_pass/$pn_count)"
@@ -1930,7 +1922,6 @@ validate_layer_13() {
 
     local exist_pass=0 exist_fail=0
 
-    jq -r '.EmailAddressId + "\t" + .EmailAddress' "$instance_alias_dir/email_addresses.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r ea_id ea_addr; do
         [ -z "$ea_id" ] && continue
         local live_ea
@@ -1943,7 +1934,7 @@ validate_layer_13() {
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $ea_addr ($ea_id)" >&2
         fi
-    done
+    done < <(jq -r '.EmailAddressId + "\t" + .EmailAddress' "$instance_alias_dir/email_addresses.json" 2>/dev/null | dos2unix)
 
     if [ "$exist_fail" -eq 0 ] && [ "$exist_pass" -gt 0 ]; then
         pass "13.1" "All email addresses exist ($exist_pass/$email_count)"
@@ -1967,7 +1958,6 @@ validate_layer_14() {
         as_count=$(jq -s 'length' "$instance_alias_dir/agentstatuses.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$as_count" -gt 0 ]; then
             local as_pass=0 as_fail=0
-            jq -r '.Id + "\t" + .Name' "$instance_alias_dir/agentstatuses.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r as_id as_name; do
                 [ -z "$as_id" ] && continue
                 local live_as
@@ -1979,7 +1969,7 @@ validate_layer_14() {
                 else
                     as_fail=$((as_fail + 1))
                 fi
-            done
+            done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/agentstatuses.json" 2>/dev/null | dos2unix)
             if [ "$as_fail" -eq 0 ]; then
                 pass "14A.1" "Agent statuses exist ($as_pass/$as_count)"
             else
@@ -1998,7 +1988,6 @@ validate_layer_14() {
         pa_count=$(jq -s 'length' "$instance_alias_dir/predefinedattributes.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$pa_count" -gt 0 ]; then
             local pa_pass=0 pa_fail=0
-            jq -r '.Name' "$instance_alias_dir/predefinedattributes.json" 2>/dev/null | dos2unix |
             while IFS= read -r pa_name; do
                 [ -z "$pa_name" ] && continue
                 local live_pa
@@ -2009,7 +1998,7 @@ validate_layer_14() {
                 else
                     pa_fail=$((pa_fail + 1))
                 fi
-            done
+            done < <(jq -r '.Name' "$instance_alias_dir/predefinedattributes.json" 2>/dev/null | dos2unix)
             if [ "$pa_fail" -eq 0 ]; then
                 pass "14B.1" "Predefined attributes exist ($pa_pass/$pa_count)"
             else
@@ -2028,7 +2017,6 @@ validate_layer_14() {
         tt_count=$(jq -s 'length' "$instance_alias_dir/tasktemplates.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$tt_count" -gt 0 ]; then
             local tt_pass=0 tt_fail=0
-            jq -r '.Id + "\t" + .Name' "$instance_alias_dir/tasktemplates.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r tt_id tt_name; do
                 [ -z "$tt_id" ] && continue
                 local live_tt
@@ -2039,7 +2027,7 @@ validate_layer_14() {
                 else
                     tt_fail=$((tt_fail + 1))
                 fi
-            done
+            done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/tasktemplates.json" 2>/dev/null | dos2unix)
             if [ "$tt_fail" -eq 0 ]; then
                 pass "14C.1" "Task templates exist ($tt_pass/$tt_count)"
             else
@@ -2058,7 +2046,6 @@ validate_layer_14() {
         ef_count=$(jq -s 'length' "$instance_alias_dir/evaluationforms.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$ef_count" -gt 0 ]; then
             local ef_pass=0 ef_fail=0
-            jq -r '.EvaluationFormId + "\t" + .Title' "$instance_alias_dir/evaluationforms.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r ef_id ef_title; do
                 [ -z "$ef_id" ] && continue
                 local live_ef
@@ -2069,7 +2056,7 @@ validate_layer_14() {
                 else
                     ef_fail=$((ef_fail + 1))
                 fi
-            done
+            done < <(jq -r '.EvaluationFormId + "\t" + .Title' "$instance_alias_dir/evaluationforms.json" 2>/dev/null | dos2unix)
             if [ "$ef_fail" -eq 0 ]; then
                 pass "14D.1" "Evaluation forms exist ($ef_pass/$ef_count)"
             else
@@ -2088,7 +2075,6 @@ validate_layer_14() {
         rule_count=$(jq -s 'length' "$instance_alias_dir/rules.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$rule_count" -gt 0 ]; then
             local rule_pass=0 rule_fail=0
-            jq -r '.RuleId + "\t" + .Name' "$instance_alias_dir/rules.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r rule_id rule_name; do
                 [ -z "$rule_id" ] && continue
                 local live_rule
@@ -2099,7 +2085,7 @@ validate_layer_14() {
                 else
                     rule_fail=$((rule_fail + 1))
                 fi
-            done
+            done < <(jq -r '.RuleId + "\t" + .Name' "$instance_alias_dir/rules.json" 2>/dev/null | dos2unix)
             if [ "$rule_fail" -eq 0 ]; then
                 pass "14E.1" "Rules exist ($rule_pass/$rule_count)"
             else
@@ -2118,7 +2104,6 @@ validate_layer_14() {
         view_count=$(jq -s 'length' "$instance_alias_dir/views.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$view_count" -gt 0 ]; then
             local view_pass=0 view_fail=0
-            jq -r '.Id + "\t" + .Name' "$instance_alias_dir/views.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r view_id view_name; do
                 [ -z "$view_id" ] && continue
                 local live_view
@@ -2129,7 +2114,7 @@ validate_layer_14() {
                 else
                     view_fail=$((view_fail + 1))
                 fi
-            done
+            done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/views.json" 2>/dev/null | dos2unix)
             if [ "$view_fail" -eq 0 ]; then
                 pass "14F.1" "Views exist ($view_pass/$view_count)"
             else
@@ -2148,7 +2133,6 @@ validate_layer_14() {
         vocab_count=$(jq -s 'length' "$instance_alias_dir/vocabularies.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$vocab_count" -gt 0 ]; then
             local vocab_pass=0 vocab_fail=0
-            jq -r '.VocabularyId + "\t" + .VocabularyName' "$instance_alias_dir/vocabularies.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r vocab_id vocab_name; do
                 [ -z "$vocab_id" ] && continue
                 local live_vocab
@@ -2159,7 +2143,7 @@ validate_layer_14() {
                 else
                     vocab_fail=$((vocab_fail + 1))
                 fi
-            done
+            done < <(jq -r '.VocabularyId + "\t" + .VocabularyName' "$instance_alias_dir/vocabularies.json" 2>/dev/null | dos2unix)
             if [ "$vocab_fail" -eq 0 ]; then
                 pass "14G.1" "Vocabularies exist ($vocab_pass/$vocab_count)"
             else
@@ -2178,7 +2162,6 @@ validate_layer_14() {
         dt_count=$(jq -s 'length' "$instance_alias_dir/datatables.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$dt_count" -gt 0 ]; then
             local dt_pass=0 dt_fail=0
-            jq -r '.TableId + "\t" + .TableName' "$instance_alias_dir/datatables.json" 2>/dev/null | dos2unix |
             while IFS=$'\t' read -r dt_id dt_name; do
                 [ -z "$dt_id" ] && continue
                 local live_dt
@@ -2189,7 +2172,7 @@ validate_layer_14() {
                 else
                     dt_fail=$((dt_fail + 1))
                 fi
-            done
+            done < <(jq -r '.TableId + "\t" + .TableName' "$instance_alias_dir/datatables.json" 2>/dev/null | dos2unix)
             if [ "$dt_fail" -eq 0 ]; then
                 pass "14H.1" "Data tables exist ($dt_pass/$dt_count)"
             else
@@ -2218,7 +2201,7 @@ validate_layer_15() {
     fi
 
     local domain_count
-    domain_count=$(jq -s 'length' "$instance_alias_dir/cases_domains.json" 2>/dev/null)
+    domain_count=$(jq 'if type == "array" then length else 0 end' "$instance_alias_dir/cases_domains.json" 2>/dev/null)
     [ "$domain_count" -eq 0 ] && {
         skip "15.1" "Cases domain" "none configured"
         layer_end; return
@@ -2259,7 +2242,7 @@ validate_layer_16() {
     fi
 
     local camp_count
-    camp_count=$(jq -s 'length' "$instance_alias_dir/campaigns.json" 2>/dev/null)
+    camp_count=$(jq 'if type == "array" then length else 0 end' "$instance_alias_dir/campaigns.json" 2>/dev/null)
     [ "$camp_count" -eq 0 ] && {
         skip "16.1" "Campaigns" "none configured"
         layer_end; return
@@ -2271,7 +2254,6 @@ validate_layer_16() {
     }
 
     local camp_pass=0 camp_fail=0
-    jq -r '.id + "\t" + .name' "$instance_alias_dir/campaigns.json" 2>/dev/null | dos2unix |
     while IFS=$'\t' read -r camp_id camp_name; do
         [ -z "$camp_id" ] && continue
         local live_camp
@@ -2282,7 +2264,7 @@ validate_layer_16() {
             camp_fail=$((camp_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $camp_name ($camp_id)" >&2
         fi
-    done
+    done < <(jq -r '.id + "\t" + .name' "$instance_alias_dir/campaigns.json" 2>/dev/null | dos2unix)
 
     if [ "$camp_fail" -eq 0 ] && [ "$camp_pass" -gt 0 ]; then
         pass "16.1" "All campaigns exist ($camp_pass/$camp_count)"
