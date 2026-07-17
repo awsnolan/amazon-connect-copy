@@ -23,7 +23,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".TaskTemplates[]$jq_prefix_filter" |
     jq -s "sort_by(.Name) | .[]" |
-    tee "$instance_alias_dir/tasktemplates.json" |
+    > "$instance_alias_dir/tasktemplates.json"
     echo -e "\n$(jq -s "length") task templates listed in \"$instance_alias_dir/tasktemplates.json\"$jq_prefix_filter_text"
 
     jq -r ".Id + \" \" + .Name" "$instance_alias_dir/tasktemplates.json" |
@@ -55,7 +55,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".EvaluationFormSummaryList[]$jq_prefix_filter" |
     jq -s "sort_by(.Title) | .[]" |
-    tee "$instance_alias_dir/evaluationforms.json" |
+    > "$instance_alias_dir/evaluationforms.json"
     echo -e "\n$(jq -s "length") evaluation forms listed in \"$instance_alias_dir/evaluationforms.json\"$jq_prefix_filter_text"
 
     jq -r ".EvaluationFormId + \" \" + .Title" "$instance_alias_dir/evaluationforms.json" |
@@ -87,7 +87,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".RuleSummaryList[]$jq_prefix_filter" |
     jq -s "sort_by(.Name) | .[]" |
-    tee "$instance_alias_dir/rules.json" |
+    > "$instance_alias_dir/rules.json"
     echo -e "\n$(jq -s "length") rules listed in \"$instance_alias_dir/rules.json\"$jq_prefix_filter_text"
 
     jq -r ".RuleId + \" \" + .Name" "$instance_alias_dir/rules.json" |
@@ -119,7 +119,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".ViewsSummaryList[]$jq_prefix_filter" |
     jq -s "sort_by(.Name) | .[]" |
-    tee "$instance_alias_dir/views.json" |
+    > "$instance_alias_dir/views.json"
     echo -e "\n$(jq -s "length") views listed in \"$instance_alias_dir/views.json\"$jq_prefix_filter_text"
 
     jq -r ".Id + \" \" + .Name" "$instance_alias_dir/views.json" |
@@ -151,7 +151,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".DefaultVocabularyList[]" |
     jq -s "sort_by(.VocabularyName) | .[]" |
-    tee "$instance_alias_dir/vocabularies.json" |
+    > "$instance_alias_dir/vocabularies.json"
     echo -e "\n$(jq -s "length") vocabularies listed in \"$instance_alias_dir/vocabularies.json\""
 
     jq -r ".VocabularyId + \" \" + .VocabularyName" "$instance_alias_dir/vocabularies.json" |
@@ -183,7 +183,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".DataTableSummaryList[]" |
     jq -s "sort_by(.TableName) | .[]" |
-    tee "$instance_alias_dir/datatables.json" |
+    > "$instance_alias_dir/datatables.json"
     echo -e "\n$(jq -s "length") data tables listed in \"$instance_alias_dir/datatables.json\""
 
     jq -r ".TableId + \" \" + .TableName" "$instance_alias_dir/datatables.json" |

@@ -23,7 +23,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".UserHierarchyGroupSummaryList // [] | .[]" |
     jq -s "sort_by(.Name) | .[]" |
-    tee "$instance_alias_dir/hierarchy_groups.json" |
+    > "$instance_alias_dir/hierarchy_groups.json"
     echo -e "\n$(jq -s "length") user hierarchy groups listed in \"$instance_alias_dir/hierarchy_groups.json\""
 
     jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hierarchy_groups.json" |
@@ -55,7 +55,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".UserSummaryList // [] | .[]" |
     jq -s "sort_by(.Username) | .[]" |
-    tee "$instance_alias_dir/users.json" |
+    > "$instance_alias_dir/users.json"
     echo -e "\n$(jq -s "length") users listed in \"$instance_alias_dir/users.json\""
 
     jq -r ".Id + \" \" + .Username" "$instance_alias_dir/users.json" |
@@ -93,7 +93,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".AuthenticationProfileSummaryList // [] | .[]" |
     jq -s "sort_by(.Name) | .[]" |
-    tee "$instance_alias_dir/auth_profiles.json" |
+    > "$instance_alias_dir/auth_profiles.json"
     echo -e "\n$(jq -s "length") authentication profiles listed in \"$instance_alias_dir/auth_profiles.json\""
 
     jq -r ".Id + \" \" + .Name" "$instance_alias_dir/auth_profiles.json" |

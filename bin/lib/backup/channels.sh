@@ -23,7 +23,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".EmailAddresses // [] | .[]" |
     jq -s "sort_by(.EmailAddress) | .[]" |
-    tee "$instance_alias_dir/email_addresses.json" |
+    > "$instance_alias_dir/email_addresses.json"
     echo -e "\n$(jq -s "length") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
 
     jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" |
@@ -84,7 +84,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".ListPhoneNumbersSummaryList // [] | .[]" |
     jq -s "sort_by(.PhoneNumber) | .[]" |
-    tee "$instance_alias_dir/phonenumbers.json" |
+    > "$instance_alias_dir/phonenumbers.json"
     echo -e "\n$(jq -s "length") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
 
     jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" |

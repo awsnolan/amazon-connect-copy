@@ -63,7 +63,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".IntegrationAssociationSummaryList // [] | .[]" |
     jq -s "sort_by(.IntegrationAssociationId) | .[]" |
-    tee "$instance_alias_dir/integrations.json" |
+    > "$instance_alias_dir/integrations.json"
     echo -e "\n$(jq -s "length") integration associations listed in \"$instance_alias_dir/integrations.json\""
 else
     echo "No integration associations found"
@@ -83,7 +83,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".Origins // [] | .[]" |
     jq -s "sort | .[]" |
-    tee "$instance_alias_dir/approved_origins.json" |
+    > "$instance_alias_dir/approved_origins.json"
     echo -e "\n$(jq -s "length") approved origins listed in \"$instance_alias_dir/approved_origins.json\""
 else
     echo "No approved origins found"
@@ -103,7 +103,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".SecurityKeysList // [] | .[]" |
     jq -s "sort_by(.AssociationId) | .[]" |
-    tee "$instance_alias_dir/security_keys.json" |
+    > "$instance_alias_dir/security_keys.json"
     echo -e "\n$(jq -s "length") security keys listed in \"$instance_alias_dir/security_keys.json\""
 else
     echo "No security keys found"
@@ -123,7 +123,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r '.LambdaFunctions // [] | sort | .[]' |
     jq -Rs '[split("\n") | .[] | select(. != "")]' |
-    tee "$instance_alias_dir/lambda_associations.json" |
+    > "$instance_alias_dir/lambda_associations.json"
     echo -e "\n$(jq 'length' "$instance_alias_dir/lambda_associations.json") Lambda function associations listed in \"$instance_alias_dir/lambda_associations.json\""
 else
     echo "No Lambda function associations found"

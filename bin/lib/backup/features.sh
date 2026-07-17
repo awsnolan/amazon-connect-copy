@@ -22,7 +22,7 @@ aws_connect list-quick-connects \
 cat $TEMPFILE |
 jq -r ".QuickConnectSummaryList[]$jq_prefix_filter" |
 jq -s "sort_by(.Name) | .[]" |
-tee "$instance_alias_dir/quickconnects.json" |
+> "$instance_alias_dir/quickconnects.json"
 echo -e "\n$(jq -s "length") quick connects listed in \"$instance_alias_dir/quickconnects.json\"$jq_prefix_filter_text"
 
 jq -r ".Id + \" \" + .Name" "$instance_alias_dir/quickconnects.json" |
@@ -50,7 +50,7 @@ aws_connect list-agent-statuses \
 cat $TEMPFILE |
 jq -r ".AgentStatusSummaryList[] | select(.Type == \"CUSTOM\")$jq_prefix_filter" |
 jq -s "sort_by(.Name) | .[]" |
-tee "$instance_alias_dir/agentstatuses.json" |
+> "$instance_alias_dir/agentstatuses.json"
 echo -e "\n$(jq -s "length") agent statuses listed in \"$instance_alias_dir/agentstatuses.json\"$jq_prefix_filter_text"
 
 jq -r ".Id + \" \" + .Name" "$instance_alias_dir/agentstatuses.json" |
@@ -77,7 +77,7 @@ aws_connect list-security-profiles \
 cat $TEMPFILE |
 jq -r ".SecurityProfileSummaryList[]$jq_prefix_filter" |
 jq -s "sort_by(.Name) | .[]" |
-tee "$instance_alias_dir/securityprofiles.json" |
+> "$instance_alias_dir/securityprofiles.json"
 echo -e "\n$(jq -s "length") security profiles listed in \"$instance_alias_dir/securityprofiles.json\"$jq_prefix_filter_text"
 
 jq -r ".Id + \" \" + .Name" "$instance_alias_dir/securityprofiles.json" |
@@ -110,7 +110,7 @@ if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".PredefinedAttributeSummaryList // [] | .[]" |
     jq -s "sort_by(.Name) | .[]" |
-    tee "$instance_alias_dir/predefinedattributes.json" |
+    > "$instance_alias_dir/predefinedattributes.json"
     echo -e "\n$(jq -s "length") predefined attributes listed in \"$instance_alias_dir/predefinedattributes.json\""
 
     jq -r ".Name" "$instance_alias_dir/predefinedattributes.json" |
