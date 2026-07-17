@@ -180,7 +180,7 @@ aws_retry() {
 }
 
 aws_connect() {
-    local cmd="aws connect$profile_flag"
+    local cmd="aws connect --output json$profile_flag"
     local ii
     for ii; do
         [[ "$ii" == *" "* || "$ii" == *"("* || "$ii" == *")"* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
@@ -189,7 +189,7 @@ aws_connect() {
 }
 
 aws_lambda() {
-    local cmd="aws lambda$profile_flag"
+    local cmd="aws lambda --output json$profile_flag"
     local ii
     for ii; do
         [[ "$ii" == *" "* || "$ii" == *"("* || "$ii" == *")"* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
@@ -198,7 +198,7 @@ aws_lambda() {
 }
 
 aws_lex_v2() {
-    local cmd="aws lexv2-models$profile_flag"
+    local cmd="aws lexv2-models --output json$profile_flag"
     local ii
     for ii; do
         [[ "$ii" == *" "* || "$ii" == *"("* || "$ii" == *")"* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
@@ -207,7 +207,7 @@ aws_lex_v2() {
 }
 
 aws_lex_classic() {
-    local cmd="aws lex-models$profile_flag"
+    local cmd="aws lex-models --output json$profile_flag"
     local ii
     for ii; do
         [[ "$ii" == *" "* || "$ii" == *"("* || "$ii" == *")"* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
@@ -216,7 +216,7 @@ aws_lex_classic() {
 }
 
 aws_cases() {
-    local cmd="aws connectcases$profile_flag"
+    local cmd="aws connectcases --output json$profile_flag"
     local ii
     for ii; do
         [[ "$ii" == *" "* || "$ii" == *"("* || "$ii" == *")"* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
@@ -225,7 +225,7 @@ aws_cases() {
 }
 
 aws_campaigns() {
-    local cmd="aws connect-campaigns-v2$profile_flag"
+    local cmd="aws connect-campaigns-v2 --output json$profile_flag"
     local ii
     for ii; do
         [[ "$ii" == *" "* || "$ii" == *"("* || "$ii" == *")"* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
@@ -457,7 +457,7 @@ validate_layer_0() {
 
             # 0.5: Connect invoke permission
             local policy
-            policy=$(aws_lambda get-policy --function-name "$arn" --output json 2>/dev/null)
+            policy=$(aws_lambda get-policy --function-name "$arn" 2>/dev/null)
             if [ -n "$policy" ]; then
                 local has_connect_perm
                 # Policy is a JSON string field; parse and check for connect.amazonaws.com principal
