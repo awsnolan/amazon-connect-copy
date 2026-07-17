@@ -389,9 +389,14 @@ else
         pa_name=${pa_name%.json}
         pa_name_decoded=$(path_decode "$pa_name")
 
+        # Skip system-managed predefined attributes (connect: prefix)
+        if [[ "$pa_name_decoded" == connect:* ]]; then
+            continue
+        fi
+
         cat "$instance_alias_dir_a/$pa_json" |
         jq --arg iid $instance_id_b \
-            ".PredefinedAttribute | del(.LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+            ".PredefinedAttribute | del(.LastModifiedRegion, .LastModifiedTime, .Purposes, .AttributeConfiguration, .IsReadOnly) | . + { InstanceId: \$iid }" |
         sed -f "$helper_sed" > "$helper/$pa_json"
 
         cat <<EOD >> "$helper_log"
@@ -439,6 +444,12 @@ else
         pa_name=${pa_json#predefinedattribute_}
         pa_name=${pa_name%.json}
         pa_name_decoded=$(path_decode "$pa_name")
+
+        # Skip system-managed predefined attributes (connect: prefix)
+        if [[ "$pa_name_decoded" == connect:* ]]; then
+            echo "system-managed, skipped"
+            continue
+        fi
         cat "$instance_alias_dir_a/$pa_json" > $TEMPA
         cat "$instance_alias_dir_b/$pa_json" > $TEMPB
         df=$(diff_files); echo $df; test "$df" == "same" && continue
@@ -446,7 +457,7 @@ else
 
         cat "$instance_alias_dir_a/$pa_json" |
         jq --arg iid $instance_id_b \
-            ".PredefinedAttribute | del(.LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+            ".PredefinedAttribute | del(.LastModifiedRegion, .LastModifiedTime, .Purposes, .AttributeConfiguration, .IsReadOnly) | . + { InstanceId: \$iid }" |
         sed -f "$helper_sed" > "$helper/$pa_json"
 
         cat <<EOD >> "$helper_log"

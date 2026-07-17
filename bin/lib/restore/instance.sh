@@ -202,7 +202,7 @@ if [ -s "$instance_alias_dir_a/users.json" ]; then
             echo "Creating user $user_name"
             cat "$user_file" |
             jq --arg iid $instance_id_b \
-                ".User | del(.Id, .Arn, .DirectoryUserId, .LastModifiedTime, .LastModifiedRegion) | . + { InstanceId: \$iid }" |
+                ".User | del(.Id, .Arn, .DirectoryUserId, .LastModifiedTime, .LastModifiedRegion, .AfterContactWorkConfigs, .AutoAcceptConfigs, .PersistentConnectionConfigs, .PhoneNumberConfigs, .VoiceEnhancementConfigs) | . + { InstanceId: \$iid }" |
             sed -f "$helper_sed" > "$helper/user_$user_name_encoded.json"
 
             cat <<EOD >> "$helper_log"
