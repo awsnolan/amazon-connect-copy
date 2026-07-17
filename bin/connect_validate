@@ -11,11 +11,11 @@ VERSION=2.0.0
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
-Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only layers] [--skip layers] instance_alias
+Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only layers] [--skip layers] [--target instance-id] [--target-profile profile] instance_alias
     Validate a saved Amazon Connect instance directory against the live instance.
 
     instance_alias  Alias of the Connect instance (or path to the directory saved by connect_backup)
-    -p profile      AWS Profile to use
+    -p profile      AWS Profile to use (for source instance, or both if --target-profile not set)
     -m mode         Validation mode:
                       local   - Validate saved JSON files only (no AWS calls) [default]
                       live    - Compare saved files against live AWS instance
@@ -25,6 +25,12 @@ Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only
     -r retries      Number of retries for transient AWS errors (default: 3)
     --only layers   Run only these layers (comma-separated numbers: 0-18)
     --skip layers   Skip these layers (comma-separated numbers: 0-18)
+    --target id     Target instance ID to validate against (for DR: validate backup
+                    against a different restored instance). If omitted, validates against
+                    the source instance from the backup.
+    --target-profile profile
+                    AWS Profile for the target instance (if in a different account).
+                    If omitted, uses -p profile for both.
     -v              Show version of this script
     -?              Help
 EOD
@@ -285,14 +291,18 @@ json_output=
 max_retries=3
 VALIDATE_ONLY=
 VALIDATE_SKIP=
+TARGET_INSTANCE_ID=
+TARGET_PROFILE=
 
-# Handle --only and --skip before getopts
+# Handle long options before getopts
 args=()
 while [ $# -gt 0 ]; do
     case "$1" in
-    --only) VALIDATE_ONLY="${2//,/ }"; shift 2;;
-    --skip) VALIDATE_SKIP="${2//,/ }"; shift 2;;
-    *)      args+=("$1"); shift;;
+    --only)           VALIDATE_ONLY="${2//,/ }"; shift 2;;
+    --skip)           VALIDATE_SKIP="${2//,/ }"; shift 2;;
+    --target)         TARGET_INSTANCE_ID="$2"; shift 2;;
+    --target-profile) TARGET_PROFILE="$2"; shift 2;;
+    *)                args+=("$1"); shift;;
     esac
 done
 set -- "${args[@]}"
@@ -315,6 +325,11 @@ profile_flag=${profile:+ --profile $profile}
 
 if [ -z "$instance_alias_dir" ]; then
     usage
+fi
+
+# If --target-profile is set, use it for all live API calls; otherwise use -p
+if [ -n "$TARGET_PROFILE" ]; then
+    profile_flag=" --profile $TARGET_PROFILE"
 fi
 
 case "$mode" in
@@ -353,19 +368,35 @@ if [ ! -d "$instance_alias_dir" ]; then
 fi
 
 # Load instance metadata
-instance_id=""
+# source_instance_id: the ID from the backup (used for reference)
+# instance_id: the ID to validate against (target if specified, otherwise source)
+source_instance_id=""
 if [ -f "$instance_alias_dir/instance.json" ]; then
-    instance_id=$(jq -r ".Id // empty" "$instance_alias_dir/instance.json" 2>/dev/null | dos2unix)
+    source_instance_id=$(jq -r ".Id // empty" "$instance_alias_dir/instance.json" 2>/dev/null | dos2unix)
+fi
+
+if [ -n "$TARGET_INSTANCE_ID" ]; then
+    instance_id="$TARGET_INSTANCE_ID"
+else
+    instance_id="$source_instance_id"
+fi
+
+target_label=""
+if [ -n "$TARGET_INSTANCE_ID" ]; then
+    target_label="$TARGET_INSTANCE_ID"
+else
+    target_label="(same as source)"
 fi
 
 if [ -z "$JSON_OUTPUT" ]; then
     cat <<EOD
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   connect_validate $VERSION
-  Instance : $instance_alias
+  Source   : $instance_alias
   Directory: $instance_alias_dir
+  Target   : $target_label
   Mode     : $mode
-  Profile  : ${profile:-${AWS_PROFILE:-(default)}}
+  Profile  : ${TARGET_PROFILE:-${profile:-${AWS_PROFILE:-(default)}}}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 EOD
 fi
@@ -375,7 +406,9 @@ fi
 ############################################################
 
 if [ -n "$do_live" ] && [ -z "$instance_id" ]; then
-    echo "Error: Cannot run live validation - instance.json missing or has no Id" >&2
+    echo "Error: Cannot run live validation — no instance ID available." >&2
+    echo "Either the backup directory must contain instance.json with an Id," >&2
+    echo "or use --target <instance-id> to specify the target instance." >&2
     exit 2
 fi
 
@@ -2621,7 +2654,8 @@ if [ -n "$JSON_OUTPUT" ]; then
   "version": "$VERSION",
   "mode": "$mode",
   "instance": "$instance_alias",
-  "instance_id": "$instance_id",
+  "source_instance_id": "$source_instance_id",
+  "target_instance_id": "$instance_id",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "duration_seconds": $DURATION,
   "summary": {
