@@ -252,7 +252,7 @@ Authentication Profiles
 -----------------------
 EOD
 if [ -s "$instance_alias_dir_a/auth_profiles.json" ]; then
-    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/auth_profiles.json" |
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/auth_profiles.json" 2>/dev/null |
     dos2unix |
     while read ap_id_a ap_name; do
         ap_name_encoded=$(path_encode "$ap_name")

@@ -126,7 +126,7 @@ Connect Cases
 -------------
 EOD
 if [ -s "$instance_alias_dir_a/cases_domains.json" ]; then
-    jq -r ".domainId + \" \" + .name" "$instance_alias_dir_a/cases_domains.json" |
+    jq -r ".domainId + \" \" + .name" "$instance_alias_dir_a/cases_domains.json" 2>/dev/null |
     dos2unix |
     while read domain_id domain_name; do
         echo "  Cases domain: $domain_name"
@@ -148,7 +148,7 @@ Outbound Campaigns
 ------------------
 EOD
 if [ -s "$instance_alias_dir_a/campaigns.json" ]; then
-    jq -r ".id + \" \" + .name" "$instance_alias_dir_a/campaigns.json" |
+    jq -r ".id + \" \" + .name" "$instance_alias_dir_a/campaigns.json" 2>/dev/null |
     dos2unix |
     while read camp_id camp_name; do
         echo "  Campaign: $camp_name"

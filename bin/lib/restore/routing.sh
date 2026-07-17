@@ -21,7 +21,9 @@ gen_helper_routing_new() {
     cat "$instance_alias_dir_a/routing_$routing_name.json" |
     jq --arg iid $instance_id_b \
         ".RoutingProfile |
-        del(.RoutingProfileId, .RoutingProfileArn) |
+        del(.RoutingProfileId, .RoutingProfileArn, .NumberOfAssociatedQueues,
+            .NumberOfAssociatedUsers, .NumberOfAssociatedManualAssignmentQueues,
+            .IsDefault, .LastModifiedRegion, .LastModifiedTime) |
         . + { InstanceId: \$iid } |
         del(.MediaConcurrencies[] | select(.Concurrency == 0))" |
     sed -f "$helper_sed" > "$out_file"
