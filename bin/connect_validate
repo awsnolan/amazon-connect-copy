@@ -462,7 +462,7 @@ validate_layer_0() {
                 local has_connect_perm
                 # Policy is a JSON string field; parse and check for connect.amazonaws.com principal
                 has_connect_perm=$(echo "$policy" | jq -r '.Policy' 2>/dev/null | \
-                    jq -r 'fromjson | .Statement[] | select(.Principal.Service == "connect.amazonaws.com" or .Principal == "connect.amazonaws.com") | .Effect' 2>/dev/null | head -1)
+                    jq -r '.Statement[] | select(.Principal.Service == "connect.amazonaws.com" or .Principal == "connect.amazonaws.com") | .Effect' 2>/dev/null | head -1)
                 if [ "$has_connect_perm" = "Allow" ]; then
                     lambda_perm_pass=$((lambda_perm_pass + 1))
                 else
