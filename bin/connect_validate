@@ -17,10 +17,12 @@ Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only
     instance_alias  Alias of the Connect instance (or path to the directory saved by connect_backup)
     -p profile      AWS Profile to use (for source instance, or both if --target-profile not set)
     -m mode         Validation mode:
-                      local   - Validate saved JSON files only (no AWS calls) [default]
-                      live    - Compare saved files against live AWS instance
-                      full    - Run both local and live validations (DR acceptance mode)
-                      smoke   - Run full + functional smoke tests
+                      local     - Validate saved JSON files only (no AWS calls) [default]
+                      live      - Compare saved files against live AWS instance
+                      full      - Run both local and live validations (DR acceptance mode)
+                      smoke     - Run full + functional smoke tests
+                      preflight - Check target readiness only (instance reachable,
+                                  credentials working, external deps available)
     -j              Output results as JSON (machine-readable)
     -r retries      Number of retries for transient AWS errors (default: 3)
     --only layers   Run only these layers (comma-separated numbers: 0-18)
@@ -333,18 +335,20 @@ if [ -n "$TARGET_PROFILE" ]; then
 fi
 
 case "$mode" in
-local|live|full|smoke) ;;
-*) echo "Invalid mode: $mode. Use local, live, full, or smoke." >&2; exit 2;;
+local|live|full|smoke|preflight) ;;
+*) echo "Invalid mode: $mode. Use local, live, full, smoke, or preflight." >&2; exit 2;;
 esac
 
 do_local=
 do_live=
 do_smoke=
+do_preflight=
 case "$mode" in
-local) do_local=on;;
-live)  do_live=on;;
-full)  do_local=on; do_live=on;;
-smoke) do_local=on; do_live=on; do_smoke=on;;
+local)     do_local=on;;
+live)      do_live=on;;
+full)      do_local=on; do_live=on;;
+smoke)     do_local=on; do_live=on; do_smoke=on;;
+preflight) do_live=on; do_preflight=on;;
 esac
 
 # Temp files
@@ -422,6 +426,110 @@ should_run_layer() {
         echo "$VALIDATE_SKIP" | grep -qw "$layer_num" && return 1 || return 0
     fi
     return 0
+}
+
+############################################################
+# Preflight mode: target readiness check
+############################################################
+
+validate_preflight() {
+    layer_start 0 "Pre-Restore Readiness"
+
+    # 1. Instance reachable
+    local live_instance
+    live_instance=$(aws_connect describe-instance --instance-id "$instance_id" 2>/dev/null)
+    if [ -z "$live_instance" ]; then
+        fail "P.1" "Target instance reachable" "Cannot reach instance $instance_id — check credentials and instance ID"
+        layer_end; return
+    fi
+    local live_status live_alias
+    live_status=$(echo "$live_instance" | jq -r '.Instance.InstanceStatus' | dos2unix)
+    live_alias=$(echo "$live_instance" | jq -r '.Instance.InstanceAlias // "(no alias)"' | dos2unix)
+    if [ "$live_status" = "ACTIVE" ]; then
+        pass "P.1" "Target instance reachable: $live_alias (ACTIVE)"
+    else
+        fail "P.1" "Target instance" "status=$live_status (expected ACTIVE)"
+        layer_end; return
+    fi
+
+    # 2. Credentials have write access (test with a benign describe call)
+    local can_list
+    can_list=$(aws_connect list-hours-of-operations --instance-id "$instance_id" --max-items 1 2>/dev/null)
+    if [ -n "$can_list" ]; then
+        pass "P.2" "API access confirmed (list operations working)"
+    else
+        fail "P.2" "API access" "list-hours-of-operations failed — check IAM permissions"
+    fi
+
+    # 3. External dependencies available
+    local deps_file="$instance_alias_dir/external_dependencies.json"
+    if [ -f "$deps_file" ]; then
+        local lambda_count lex_count
+        lambda_count=$(jq ".LambdaFunctions | length" "$deps_file" 2>/dev/null || echo 0)
+        lex_count=$(jq ".LexV2Bots | length" "$deps_file" 2>/dev/null || echo 0)
+
+        if [ "$lambda_count" -eq 0 ] && [ "$lex_count" -eq 0 ]; then
+            pass "P.3" "No external dependencies required"
+        else
+            local dep_ok=0 dep_missing=0
+
+            # Check Lambdas
+            while IFS= read -r arn; do
+                [ -z "$arn" ] && continue
+                local func_name="${arn##*:function:}"
+                func_name="${func_name%%:*}"
+                local exists
+                exists=$(aws_lambda get-function --function-name "$arn" 2>/dev/null | jq -r '.Configuration.State // empty')
+                if [ "$exists" = "Active" ]; then
+                    dep_ok=$((dep_ok + 1))
+                else
+                    dep_missing=$((dep_missing + 1))
+                    [ -z "$JSON_OUTPUT" ] && echo "         → Lambda not found: $func_name" >&2
+                fi
+            done < <(jq -r '.LambdaFunctions[].Arn' "$deps_file" 2>/dev/null)
+
+            # Check Lex V2 bots
+            while IFS= read -r arn; do
+                [ -z "$arn" ] && continue
+                local bot_id
+                bot_id=$(echo "$arn" | sed 's|.*bot-alias/\([^/]*\)/.*|\1|')
+                local bot_name
+                bot_name=$(jq -r ".LexV2Bots[] | select(.Arn == \"$arn\") | .BotName // \"$bot_id\"" "$deps_file" | dos2unix)
+                local bot_check
+                bot_check=$(aws_lex_v2 describe-bot --bot-id "$bot_id" 2>/dev/null | jq -r '.botStatus // empty')
+                if [ "$bot_check" = "Available" ]; then
+                    dep_ok=$((dep_ok + 1))
+                else
+                    dep_missing=$((dep_missing + 1))
+                    [ -z "$JSON_OUTPUT" ] && echo "         → Lex V2 bot not found: $bot_name" >&2
+                fi
+            done < <(jq -r '.LexV2Bots[].Arn' "$deps_file" 2>/dev/null)
+
+            local dep_total=$((dep_ok + dep_missing))
+            if [ "$dep_missing" -eq 0 ]; then
+                pass "P.3" "External dependencies available ($dep_ok/$dep_total)"
+            else
+                fail "P.3" "External dependencies" "$dep_missing of $dep_total not deployed to target account"
+            fi
+        fi
+    else
+        skip "P.3" "External dependencies" "No manifest found (run connect_backup first)"
+    fi
+
+    # 4. Summary guidance
+    if [ -z "$JSON_OUTPUT" ]; then
+        echo ""
+        if [ "$FAIL" -eq 0 ]; then
+            echo "  ✓ Target is ready to receive a restore."
+            echo "    Next: connect_backup <target-alias>"
+            echo "    Then: connect_plan <source-dir> <target-dir> <helper>"
+            echo "    Then: connect_restore <helper>"
+        else
+            echo "  ✗ Target is NOT ready. Fix the issues above before restoring."
+        fi
+    fi
+
+    layer_end
 }
 
 ############################################################
@@ -2611,31 +2719,36 @@ validate_layer_18() {
 # Main execution
 ############################################################
 
-# Run layers in dependency order
-if [ -n "$do_live" ]; then
-    should_run_layer 0 && validate_layer_0
-fi
-should_run_layer 1 && validate_layer_1
-should_run_layer 2 && validate_layer_2
-should_run_layer 3 && validate_layer_3
-should_run_layer 4 && validate_layer_4
-should_run_layer 5 && validate_layer_5
-should_run_layer 6 && validate_layer_6
-should_run_layer 7 && validate_layer_7
-should_run_layer 8 && validate_layer_8
-# Layers 9+10 are combined (modules + flows)
-if should_run_layer 9 || should_run_layer 10; then
-    validate_layer_9_10
-fi
-should_run_layer 11 && validate_layer_11
-should_run_layer 12 && validate_layer_12
-should_run_layer 13 && validate_layer_13
-should_run_layer 14 && validate_layer_14
-should_run_layer 15 && validate_layer_15
-should_run_layer 16 && validate_layer_16
-should_run_layer 17 && validate_layer_17
-if [ -n "$do_smoke" ]; then
-    should_run_layer 18 && validate_layer_18
+# Preflight mode: only run the readiness check
+if [ -n "$do_preflight" ]; then
+    validate_preflight
+else
+    # Run layers in dependency order
+    if [ -n "$do_live" ]; then
+        should_run_layer 0 && validate_layer_0
+    fi
+    should_run_layer 1 && validate_layer_1
+    should_run_layer 2 && validate_layer_2
+    should_run_layer 3 && validate_layer_3
+    should_run_layer 4 && validate_layer_4
+    should_run_layer 5 && validate_layer_5
+    should_run_layer 6 && validate_layer_6
+    should_run_layer 7 && validate_layer_7
+    should_run_layer 8 && validate_layer_8
+    # Layers 9+10 are combined (modules + flows)
+    if should_run_layer 9 || should_run_layer 10; then
+        validate_layer_9_10
+    fi
+    should_run_layer 11 && validate_layer_11
+    should_run_layer 12 && validate_layer_12
+    should_run_layer 13 && validate_layer_13
+    should_run_layer 14 && validate_layer_14
+    should_run_layer 15 && validate_layer_15
+    should_run_layer 16 && validate_layer_16
+    should_run_layer 17 && validate_layer_17
+    if [ -n "$do_smoke" ]; then
+        should_run_layer 18 && validate_layer_18
+    fi
 fi
 
 ############################################################
