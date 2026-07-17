@@ -305,7 +305,9 @@ EOD
         check_contact_flow $helper/$module_json
         if [ $? -ne 0 ]; then
             cat $TEMPCHK >> "$helper_log"
-            # Continue to handle error
+            echo "WARNING: Skipping content update for module $module_name_decoded — broken references detected"
+            manual_action "Broken Module" "Module '$module_name_decoded' has broken references. Fix source module or accept as-is."
+            continue
         fi
 
         aws_connect update-contact-flow-module-content \
@@ -403,7 +405,9 @@ EOD
         check_contact_flow $helper/$flow_json
         if [ $? -ne 0 ]; then
             cat $TEMPCHK >> "$helper_log"
-            # Continue to handle error
+            echo "WARNING: Skipping content update for $flow_name_decoded — broken references detected"
+            manual_action "Broken Flow" "Flow '$flow_name_decoded' has broken references to non-existent resources. Fix source flow or accept as-is."
+            continue
         fi
 
         aws_connect update-contact-flow-content \
