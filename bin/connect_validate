@@ -473,13 +473,13 @@ validate_preflight() {
         else
             local dep_ok=0 dep_missing=0
 
-            # Check Lambdas
+            # Check Lambdas (use function name, not full ARN — ARN has source account)
             while IFS= read -r arn; do
                 [ -z "$arn" ] && continue
                 local func_name="${arn##*:function:}"
                 func_name="${func_name%%:*}"
                 local exists
-                exists=$(aws_lambda get-function --function-name "$arn" 2>/dev/null | jq -r '.Configuration.State // empty')
+                exists=$(aws_lambda get-function --function-name "$func_name" 2>/dev/null | jq -r '.Configuration.State // empty')
                 if [ "$exists" = "Active" ]; then
                     dep_ok=$((dep_ok + 1))
                 else
@@ -488,22 +488,32 @@ validate_preflight() {
                 fi
             done < <(jq -r '.LambdaFunctions[].Arn' "$deps_file" 2>/dev/null)
 
-            # Check Lex V2 bots
-            while IFS= read -r arn; do
-                [ -z "$arn" ] && continue
-                local bot_id
-                bot_id=$(echo "$arn" | sed 's|.*bot-alias/\([^/]*\)/.*|\1|')
+            # Check Lex V2 bots (use bot name to search, not source ARN)
+            while IFS= read -r bot_entry; do
+                [ -z "$bot_entry" ] && continue
                 local bot_name
-                bot_name=$(jq -r ".LexV2Bots[] | select(.Arn == \"$arn\") | .BotName // \"$bot_id\"" "$deps_file" | dos2unix)
+                bot_name=$(echo "$bot_entry" | jq -r '.BotName // empty' 2>/dev/null)
+                local bot_id
+                bot_id=$(echo "$bot_entry" | jq -r '.BotId // empty' 2>/dev/null)
+                [ -z "$bot_name" ] && bot_name="$bot_id"
+                # Try by bot ID first (same ID might exist cross-account via import)
                 local bot_check
                 bot_check=$(aws_lex_v2 describe-bot --bot-id "$bot_id" 2>/dev/null | jq -r '.botStatus // empty')
                 if [ "$bot_check" = "Available" ]; then
                     dep_ok=$((dep_ok + 1))
                 else
-                    dep_missing=$((dep_missing + 1))
-                    [ -z "$JSON_OUTPUT" ] && echo "         → Lex V2 bot not found: $bot_name" >&2
+                    # Bot ID won't match cross-account — search by name
+                    local found_bot
+                    found_bot=$(aws_lex_v2 list-bots 2>/dev/null | \
+                        jq -r ".botSummaries[] | select(.botName == \"$bot_name\") | .botStatus" 2>/dev/null | head -1)
+                    if [ "$found_bot" = "Available" ]; then
+                        dep_ok=$((dep_ok + 1))
+                    else
+                        dep_missing=$((dep_missing + 1))
+                        [ -z "$JSON_OUTPUT" ] && echo "         → Lex V2 bot not found: $bot_name" >&2
+                    fi
                 fi
-            done < <(jq -r '.LexV2Bots[].Arn' "$deps_file" 2>/dev/null)
+            done < <(jq -c '.LexV2Bots[]' "$deps_file" 2>/dev/null)
 
             local dep_total=$((dep_ok + dep_missing))
             if [ "$dep_missing" -eq 0 ]; then
