@@ -233,3 +233,24 @@ for Disaster Recovery use cases. The following work remains:
   existence checks only — full normalized content diff is not yet implemented
 - `connect_plan` does not yet modularize into lib/ (it's 900 lines, file-only,
   lower priority)
+- Cross-reference integrity (Layer 17) reports pre-existing broken references
+  (deleted flows still referenced by other flows) as FAIL — should downgrade to
+  WARN when the target resource doesn't exist on the source instance either
+  (pre-existing issue, not a DR risk)
+
+### Bugs to fix (from live testing)
+
+- Layer 0.5: Lambda permission check incorrectly fails despite permissions existing
+  (policy parsing issue in validate — may need to handle `SourceArn` condition)
+- Layer 1.2: Instance alias match prints twice (local + live both emit it)
+- Layer 1.3: Instance attributes reports "none found" despite file existing
+  (jq selector may not handle the multi-document format)
+- Layer 14: Agent statuses, predefined attributes, and views report PASS with
+  (0/N) counts — the live describe loop isn't executing (likely a jq/iteration issue
+  with the manifest format)
+- Layer 15: Cases domains should SKIP (not FAIL) when Cases feature isn't enabled
+  and the saved file contains `[]`
+- Layers 4, 5, 7, 8, 16: Live mode produces section headers but no test output
+  (the live validation loops may not be executing)
+- Layer 11: Phone numbers show "Flow target not found" errors but then reports
+  SKIP — logic needs to report WARN or FAIL instead of SKIP when targets are broken
