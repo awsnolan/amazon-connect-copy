@@ -524,11 +524,16 @@ if [ -s "$instance_alias_dir_a/views.json" ]; then
     dos2unix |
     while read view_id_a view_name; do
         view_name_encoded=$(path_encode "$view_name")
-        view_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/views.json" | jq -r "select(.Name == \"${view_name//\"/%22}\") | .Id" | dos2unix)
+        # Skip AWS-managed views that don't have detail files
+        [ ! -f "$instance_alias_dir_a/view_$view_name_encoded.json" ] && continue
+        view_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/views.json" 2>/dev/null | jq -r "select(.Name == \"${view_name//\"/%22}\") | .Id" | dos2unix)
         if [ -z "$view_id_b" ]; then
             add_file "$instance_alias_dir_a" "view_$view_name_encoded.json" $helper_new
         else
-            add_file "$instance_alias_dir_b" "view_$view_name_encoded.json" $helper_old
+            # Only add to helper_old if target also has the detail file
+            if [ -f "$instance_alias_dir_b/view_$view_name_encoded.json" ]; then
+                add_file "$instance_alias_dir_b" "view_$view_name_encoded.json" $helper_old
+            fi
             cat <<EOD >> $helper_sed
 # View: $view_name
 s%$view_id_a%$view_id_b%g
