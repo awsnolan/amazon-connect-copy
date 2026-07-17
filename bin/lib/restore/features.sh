@@ -161,7 +161,7 @@ else
 
         cat "$instance_alias_dir_a/$as_json" |
         jq --arg iid $instance_id_b \
-            ".AgentStatus | del(.AgentStatusId, .AgentStatusARN, .LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+            ".AgentStatus | del(.AgentStatusId, .AgentStatusARN, .Type, .LastModifiedRegion, .LastModifiedTime) | . + { InstanceId: \$iid }" |
         sed -f "$helper_sed" > "$helper/$as_json"
 
         cat <<EOD >> "$helper_log"
