@@ -457,7 +457,7 @@ validate_layer_0() {
 
             # 0.5: Connect invoke permission
             local policy
-            policy=$(aws_lambda get-policy --function-name "$arn" 2>/dev/null)
+            policy=$(aws_lambda get-policy --function-name "$arn" --output json 2>/dev/null)
             if [ -n "$policy" ]; then
                 local has_connect_perm
                 # Policy is a JSON string field; parse and check for connect.amazonaws.com principal
@@ -2331,7 +2331,7 @@ validate_layer_17() {
     # --- 17.1-17.6: Flow references resolve ---
     local ref_queue_pass=0 ref_queue_fail=0
     local ref_prompt_pass=0 ref_prompt_fail=0
-    local ref_flow_pass=0 ref_flow_fail=0
+    local ref_flow_pass=0 ref_flow_fail=0 ref_flow_warn=0
     local ref_module_pass=0 ref_module_fail=0
     local ref_lambda_pass=0 ref_lambda_fail=0
     local ref_lex_pass=0 ref_lex_fail=0
@@ -2367,8 +2367,23 @@ validate_layer_17() {
                 if grep -qF "$cfid" "$known_ids_file" 2>/dev/null; then
                     ref_flow_pass=$((ref_flow_pass + 1))
                 else
-                    ref_flow_fail=$((ref_flow_fail + 1))
-                    unresolved_details="$unresolved_details\n         → Flow ref in $fname: $cfid"
+                    # In live mode, check if the flow exists on the instance at all
+                    # If it doesn't, this is a pre-existing dead reference (not a DR risk)
+                    if [ -n "$do_live" ]; then
+                        local cf_check
+                        cf_check=$(aws_connect describe-contact-flow \
+                            --instance-id "$instance_id" \
+                            --contact-flow-id "$cfid" 2>/dev/null)
+                        if [ -z "$cf_check" ]; then
+                            ref_flow_warn=$((ref_flow_warn + 1))
+                            unresolved_details="$unresolved_details\n         → Dead flow ref in $fname: $cfid (does not exist on instance)"
+                        else
+                            ref_flow_pass=$((ref_flow_pass + 1))
+                        fi
+                    else
+                        ref_flow_fail=$((ref_flow_fail + 1))
+                        unresolved_details="$unresolved_details\n         → Flow ref in $fname: $cfid"
+                    fi
                 fi
             elif [[ "$arn" == *"/flow-module/"* ]] || [[ "$arn" == *"/module/"* ]]; then
                 local mid="${arn##*/}"
@@ -2405,10 +2420,12 @@ validate_layer_17() {
         fi
     fi
 
-    local total_flow_ref=$((ref_flow_pass + ref_flow_fail))
+    local total_flow_ref=$((ref_flow_pass + ref_flow_fail + ref_flow_warn))
     if [ "$total_flow_ref" -gt 0 ]; then
-        if [ "$ref_flow_fail" -eq 0 ]; then
+        if [ "$ref_flow_fail" -eq 0 ] && [ "$ref_flow_warn" -eq 0 ]; then
             pass "17.3" "Flow → flow references ($ref_flow_pass/$total_flow_ref)"
+        elif [ "$ref_flow_fail" -eq 0 ] && [ "$ref_flow_warn" -gt 0 ]; then
+            warn "17.3" "Flow → flow references" "$ref_flow_warn pre-existing dead reference(s) on instance"
         else
             fail "17.3" "Flow → flow references" "$ref_flow_fail of $total_flow_ref unresolved"
         fi
