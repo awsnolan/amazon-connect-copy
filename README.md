@@ -257,14 +257,12 @@ for Disaster Recovery use cases. The following work remains:
 
 ### Backlog (enhancements)
 
-- **CRITICAL: Force JSON output on all AWS CLI calls.** The scripts set
-  `export AWS_DEFAULT_OUTPUT=json` but this can be overridden by user's
-  `~/.aws/config` profile settings (`output = text`). This has caused jq parse
-  failures throughout development. Fix: add `--output json` to every AWS CLI
-  wrapper function (`aws_connect_backup`, `aws_connect_restore`, `aws_retry`,
-  `aws_lambda`, `aws_lex_v2`, `aws_cases`, `aws_campaigns`) so it's impossible
-  for a user's environment to produce non-JSON output. This is a one-line change
-  per wrapper in `lib/common.sh` and `connect_validate`.
+- **Consistent layered output across all scripts.** Currently only `connect_validate`
+  uses the `━━━ Layer N: Name ━━━` style. The backup, plan, and restore scripts use
+  inconsistent heading styles (`━━━ Name ━━━`, `Checking X ...`, section headers with
+  `---`). Unify all four scripts to use the same layered output pattern with clear
+  section markers. Also: restore dry-run dumps full JSON for every resource — should
+  show one-line summaries with a `--verbose` flag for full JSON.
 - ASCII colorizer: add unobtrusive single-line ASCII art to designate PASS/FAIL/WARN/SKIP
   results (green/red/yellow/grey). Opt-in by default, disable with `--no-color` flag.
   Use standard ANSI escape codes.
