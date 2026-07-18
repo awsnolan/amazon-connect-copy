@@ -232,7 +232,60 @@ EOD
                 fi
             fi
         else
-            echo "User $user_name already exists"
+            echo "Updating user $user_name (already exists)"
+            # Update routing profile
+            local src_rp_id
+            src_rp_id=$(jq -r '.User.RoutingProfileId // empty' "$user_file" | tr -d '\r')
+            if [ -n "$src_rp_id" ]; then
+                local target_rp_id
+                target_rp_id=$(echo "$src_rp_id" | sed -f "$helper_sed")
+                cat <<EOD >> "$helper_log"
+$actionLead Update user routing profile: $user_name
+EOD
+                if [ -z "$dryrun" ]; then
+                    aws_connect update-user-routing-profile \
+                        --instance-id $instance_id_b \
+                        --user-id $user_id_b \
+                        --routing-profile-id "$target_rp_id" 2>/dev/null || true
+                fi
+            fi
+            # Update security profiles
+            local src_sp_ids
+            src_sp_ids=$(jq -r '.User.SecurityProfileIds // [] | .[]' "$user_file" | sed -f "$helper_sed" | tr -d '\r')
+            if [ -n "$src_sp_ids" ]; then
+                local sp_array
+                sp_array=$(echo "$src_sp_ids" | jq -Rs '[split("\n") | .[] | select(. != "")]')
+                cat <<EOD >> "$helper_log"
+$actionLead Update user security profiles: $user_name
+EOD
+                if [ -z "$dryrun" ]; then
+                    aws_connect update-user-security-profiles \
+                        --instance-id $instance_id_b \
+                        --user-id $user_id_b \
+                        --security-profile-ids $src_sp_ids 2>/dev/null || true
+                fi
+            fi
+            # Update hierarchy group
+            local src_hg_id
+            src_hg_id=$(jq -r '.User.HierarchyGroupId // empty' "$user_file" | tr -d '\r')
+            if [ -n "$src_hg_id" ] && [ "$src_hg_id" != "null" ]; then
+                local target_hg_id
+                target_hg_id=$(echo "$src_hg_id" | sed -f "$helper_sed")
+                cat <<EOD >> "$helper_log"
+$actionLead Update user hierarchy group: $user_name
+EOD
+                if [ -z "$dryrun" ]; then
+                    aws_connect update-user-hierarchy \
+                        --instance-id $instance_id_b \
+                        --user-id $user_id_b \
+                        --hierarchy-group-id "$target_hg_id" 2>/dev/null || true
+                fi
+            fi
+            # Record ID mapping
+            cat <<EOD >> "$helper_sed"
+# User: $user_name
+s%$user_id_a%$user_id_b%g
+EOD
         fi
     done
     test $? -eq 0 || error

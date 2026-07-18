@@ -621,6 +621,40 @@ validate_preflight() {
         skip "P.3" "External dependencies" "No manifest found (run connect_backup first)"
     fi
 
+    # P.4: Users pre-provisioned on target
+    local users_file="$instance_alias_dir/users.json"
+    if [ -f "$users_file" ]; then
+        local src_user_count
+        src_user_count=$(jq -s 'length' "$users_file" 2>/dev/null || echo 0)
+        if [ "$src_user_count" -gt 0 ]; then
+            # List users on target
+            local target_users
+            target_users=$(aws_connect list-users --instance-id "$instance_id" --max-items $maxitems 2>/dev/null)
+            local users_missing=0 users_found=0
+            while IFS=$'\t' read -r uid uname; do
+                [ -z "$uname" ] && continue
+                local exists
+                exists=$(echo "$target_users" | jq -r ".UserSummaryList // [] | .[] | select(.Username == \"$uname\") | .Id" 2>/dev/null | head -1)
+                if [ -n "$exists" ]; then
+                    users_found=$((users_found + 1))
+                else
+                    users_missing=$((users_missing + 1))
+                    [ -z "$JSON_OUTPUT" ] && echo "         → User not provisioned: $uname" >&2
+                fi
+            done < <(jq -r '.Id + "\t" + .Username' "$users_file" | tr -d '\r')
+
+            if [ "$users_missing" -eq 0 ]; then
+                pass "P.4" "All users pre-provisioned on target ($users_found/$src_user_count)"
+            else
+                fail "P.4" "Users not provisioned" "$users_missing of $src_user_count users missing on target. Pre-create via Identity Center or Connect console before restore."
+            fi
+        else
+            skip "P.4" "Users" "none in source backup"
+        fi
+    else
+        skip "P.4" "Users" "users.json not found"
+    fi
+
     # 4. Summary guidance
     if [ -z "$JSON_OUTPUT" ]; then
         echo ""
