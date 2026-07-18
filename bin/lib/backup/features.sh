@@ -19,9 +19,12 @@ aws_connect list-quick-connects \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-jq -r '[.QuickConnectSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
-> "$instance_alias_dir/quickconnects.json"
-echo -e "\n$(jq -s "length") quick connects listed in \"$instance_alias_dir/quickconnects.json\"$jq_prefix_filter_text"
+jq -r ".QuickConnectSummaryList[]$jq_prefix_filter" "$TEMPFILE" \
+> "$instance_alias_dir/quickconnects.json.tmp"
+jq -s 'sort_by(.Name) | .[]' "$instance_alias_dir/quickconnects.json.tmp" \
+> "$instance_alias_dir/quickconnects.json" 2>/dev/null || true
+rm -f "$instance_alias_dir/quickconnects.json.tmp"
+echo "$(jq -s 'length' "$instance_alias_dir/quickconnects.json" 2>/dev/null || echo 0) quick connects"
 
 while read qc_id qc_name; do
     echo "Exporting quick connect $qc_name"
@@ -43,9 +46,12 @@ aws_connect list-agent-statuses \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-jq -r '[.AgentStatusSummaryList[] | select(.Type == \"CUSTOM\")$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
-> "$instance_alias_dir/agentstatuses.json"
-echo -e "\n$(jq -s "length") agent statuses listed in \"$instance_alias_dir/agentstatuses.json\"$jq_prefix_filter_text"
+jq -r ".AgentStatusSummaryList[] | select(.Type == \"CUSTOM\")$jq_prefix_filter" "$TEMPFILE" \
+> "$instance_alias_dir/agentstatuses.json.tmp"
+jq -s 'sort_by(.Name) | .[]' "$instance_alias_dir/agentstatuses.json.tmp" \
+> "$instance_alias_dir/agentstatuses.json" 2>/dev/null || true
+rm -f "$instance_alias_dir/agentstatuses.json.tmp"
+echo "$(jq -s 'length' "$instance_alias_dir/agentstatuses.json" 2>/dev/null || echo 0) agent statuses"
 
 while read as_id as_name; do
     echo "Exporting agent status $as_name"
@@ -66,9 +72,12 @@ aws_connect list-security-profiles \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-jq -r '[.SecurityProfileSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
-> "$instance_alias_dir/securityprofiles.json"
-echo -e "\n$(jq -s "length") security profiles listed in \"$instance_alias_dir/securityprofiles.json\"$jq_prefix_filter_text"
+jq -r ".SecurityProfileSummaryList[]$jq_prefix_filter" "$TEMPFILE" \
+> "$instance_alias_dir/securityprofiles.json.tmp"
+jq -s 'sort_by(.Name) | .[]' "$instance_alias_dir/securityprofiles.json.tmp" \
+> "$instance_alias_dir/securityprofiles.json" 2>/dev/null || true
+rm -f "$instance_alias_dir/securityprofiles.json.tmp"
+echo "$(jq -s 'length' "$instance_alias_dir/securityprofiles.json" 2>/dev/null || echo 0) security profiles"
 
 while read sp_id sp_name; do
     echo "Exporting security profile $sp_name"

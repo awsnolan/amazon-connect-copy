@@ -20,7 +20,7 @@ aws_connect list-task-templates \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    jq -r '[.TaskTemplates[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
+    jq -r "[.TaskTemplates[]$jq_prefix_filter] | sort_by(.Name) | .[]" "$TEMPFILE" \
     > "$instance_alias_dir/tasktemplates.json"
     echo -e "\n$(jq -s "length") task templates listed in \"$instance_alias_dir/tasktemplates.json\"$jq_prefix_filter_text"
 
@@ -48,7 +48,7 @@ aws_connect list-evaluation-forms \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    jq -r '[.EvaluationFormSummaryList[]$jq_prefix_filter] | sort_by(.Title) | .[]' "$TEMPFILE" \
+    jq -r "[.EvaluationFormSummaryList[]$jq_prefix_filter] | sort_by(.Title) | .[]" "$TEMPFILE" \
     > "$instance_alias_dir/evaluationforms.json"
     echo -e "\n$(jq -s "length") evaluation forms listed in \"$instance_alias_dir/evaluationforms.json\"$jq_prefix_filter_text"
 
@@ -76,7 +76,7 @@ aws_connect list-rules \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    jq -r '[.RuleSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
+    jq -r "[.RuleSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]" "$TEMPFILE" \
     > "$instance_alias_dir/rules.json"
     echo -e "\n$(jq -s "length") rules listed in \"$instance_alias_dir/rules.json\"$jq_prefix_filter_text"
 
@@ -104,7 +104,7 @@ aws_connect list-views \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    jq -r '[.ViewsSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
+    jq -r "[.ViewsSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]" "$TEMPFILE" \
     > "$instance_alias_dir/views.json"
     echo -e "\n$(jq -s "length") views listed in \"$instance_alias_dir/views.json\"$jq_prefix_filter_text"
 

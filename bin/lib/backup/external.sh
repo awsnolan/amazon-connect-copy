@@ -88,7 +88,7 @@ aws_connect list-contact-flow-modules \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-jq -r '[.ContactFlowModulesSummaryList[]${contact_flow_prefix_filter}${jq_prefix_filter}] | sort_by(.Name) | .[]' "$TEMPFILE" \
+jq -r "[.ContactFlowModulesSummaryList[]${contact_flow_prefix_filter}${jq_prefix_filter}] | sort_by(.Name) | .[]" "$TEMPFILE" \
 > "$instance_alias_dir/modules.json"
 echo -e "\n$(jq -s "length") contact flow modules listed in \"$instance_alias_dir/modules.json\"$contact_flow_prefix_text$jq_prefix_filter_text"
 
@@ -126,7 +126,7 @@ aws_connect list-contact-flows \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-jq -r '[.ContactFlowSummaryList[]${contact_flow_prefix_filter}${jq_prefix_filter}] | sort_by(.Name) | .[]' "$TEMPFILE" \
+jq -r "[.ContactFlowSummaryList[]${contact_flow_prefix_filter}${jq_prefix_filter}] | sort_by(.Name) | .[]" "$TEMPFILE" \
 > "$instance_alias_dir/flows.json"
 echo "$(jq -s 'length' "$instance_alias_dir/flows.json") contact flows listed in \"$instance_alias_dir/flows.json\"$contact_flow_prefix_text$jq_prefix_filter_text"
 
