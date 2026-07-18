@@ -429,6 +429,101 @@ should_run_layer() {
 }
 
 ############################################################
+# Cross-account target mapping
+#
+# When --target is set (different instance), resources have different IDs.
+# Build name→ID maps by listing resources on the target once upfront.
+############################################################
+
+CROSS_ACCOUNT=
+[ -n "$TARGET_INSTANCE_ID" ] && [ "$TARGET_INSTANCE_ID" != "$source_instance_id" ] && CROSS_ACCOUNT=on
+
+# Map files
+MAP_HOURS="${TEMPFILE}_map_hours"
+MAP_QUEUES="${TEMPFILE}_map_queues"
+MAP_ROUTINGS="${TEMPFILE}_map_routings"
+MAP_SECURITY="${TEMPFILE}_map_security"
+MAP_USERS="${TEMPFILE}_map_users"
+MAP_QC="${TEMPFILE}_map_qc"
+MAP_FLOWS="${TEMPFILE}_map_flows"
+MAP_MODULES="${TEMPFILE}_map_modules"
+MAP_STATUSES="${TEMPFILE}_map_statuses"
+MAP_VIEWS="${TEMPFILE}_map_views"
+touch "$MAP_HOURS" "$MAP_QUEUES" "$MAP_ROUTINGS" "$MAP_SECURITY" "$MAP_USERS" \
+      "$MAP_QC" "$MAP_FLOWS" "$MAP_MODULES" "$MAP_STATUSES" "$MAP_VIEWS"
+
+build_target_maps() {
+    # Build name→ID JSON maps from target instance list APIs
+    [ -z "$CROSS_ACCOUNT" ] && return 0
+    [ -z "$JSON_OUTPUT" ] && echo "  Building cross-account resource maps..."
+
+    # Hours of operations
+    aws_connect list-hours-of-operations --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.HoursOfOperationSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_HOURS"
+
+    # Queues
+    aws_connect list-queues --instance-id "$instance_id" --max-items $maxitems --queue-types STANDARD 2>/dev/null | \
+        jq -r '.QueueSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_QUEUES"
+
+    # Routing profiles
+    aws_connect list-routing-profiles --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.RoutingProfileSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_ROUTINGS"
+
+    # Security profiles
+    aws_connect list-security-profiles --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.SecurityProfileSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_SECURITY"
+
+    # Users
+    aws_connect list-users --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.UserSummaryList // [] | map({(.Username): .Id}) | add // {}' > "$MAP_USERS"
+
+    # Quick connects
+    aws_connect list-quick-connects --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.QuickConnectSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_QC"
+
+    # Contact flows
+    aws_connect list-contact-flows --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.ContactFlowSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_FLOWS"
+
+    # Contact flow modules
+    aws_connect list-contact-flow-modules --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.ContactFlowModulesSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_MODULES"
+
+    # Agent statuses
+    aws_connect list-agent-statuses --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.AgentStatusSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_STATUSES"
+
+    # Views
+    aws_connect list-views --instance-id "$instance_id" --max-items $maxitems 2>/dev/null | \
+        jq -r '.ViewsSummaryList // [] | map({(.Name): .Id}) | add // {}' > "$MAP_VIEWS"
+
+    [ -z "$JSON_OUTPUT" ] && echo "  Maps built."
+}
+
+# Resolve a resource name to target ID using the maps
+# Usage: resolve_target_id MAP_FILE "resource name"
+# Returns: target ID or empty
+resolve_target_id() {
+    local map_file="$1"
+    local name="$2"
+    jq -r ".[\"$name\"] // empty" "$map_file" 2>/dev/null
+}
+
+# Get the effective ID for a resource — uses source ID if same instance, resolves by name if cross-account
+# Usage: effective_id MAP_FILE source_id source_name
+# Returns: the ID to use for describe calls
+effective_id() {
+    local map_file="$1"
+    local src_id="$2"
+    local src_name="$3"
+    if [ -z "$CROSS_ACCOUNT" ]; then
+        echo "$src_id"
+    else
+        resolve_target_id "$map_file" "$src_name"
+    fi
+}
+
+############################################################
 # Preflight mode: target readiness check
 ############################################################
 
@@ -993,7 +1088,10 @@ validate_layer_2() {
         local live_hour
         live_hour=$(aws_connect describe-hours-of-operation \
             --instance-id "$instance_id" \
-            --hours-of-operation-id "$hour_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_hour_id
+            eff_hour_id=$(effective_id "$MAP_HOURS" "$hour_id" "$hour_name")
+            --hours-of-operation-id "${eff_hour_id:-$hour_id}" 2>/dev/null)
         if [ -z "$live_hour" ]; then
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $hour_name ($hour_id)" >&2
@@ -1058,7 +1156,7 @@ validate_layer_2() {
             saved_override_count=$(jq '.HoursOfOperationOverrideList | length' "$saved_overrides_file" 2>/dev/null || echo 0)
             live_overrides=$(aws_connect list-hours-of-operation-overrides \
                 --instance-id "$instance_id" \
-                --hours-of-operation-id "$hour_id" \
+                --hours-of-operation-id "$eff_hour_id" \
                 --max-items $maxitems 2>/dev/null)
             live_override_count=$(echo "$live_overrides" | jq '.HoursOfOperationOverrideList | length' 2>/dev/null || echo 0)
             if [ "$saved_override_count" = "$live_override_count" ]; then
@@ -1142,7 +1240,10 @@ validate_layer_3() {
         local live_queue
         live_queue=$(aws_connect describe-queue \
             --instance-id "$instance_id" \
-            --queue-id "$queue_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_queue_id
+            eff_queue_id=$(effective_id "$MAP_QUEUES" "$queue_id" "$queue_name")
+            --queue-id "${eff_queue_id:-$queue_id}" 2>/dev/null)
         if [ -z "$live_queue" ]; then
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $queue_name ($queue_id)" >&2
@@ -1237,7 +1338,7 @@ validate_layer_3() {
             saved_qc_names=$(jq -r '.QuickConnectSummaryList[]?.Name // empty' "$qc_saved_file" 2>/dev/null | sort)
             live_qc_data=$(aws_connect list-queue-quick-connects \
                 --instance-id "$instance_id" \
-                --queue-id "$queue_id" \
+                --queue-id "$eff_queue_id" \
                 --max-items $maxitems 2>/dev/null)
             live_qc_names=$(echo "$live_qc_data" | jq -r '.QuickConnectSummaryList[]?.Name // empty' 2>/dev/null | sort)
             if [ "$saved_qc_names" = "$live_qc_names" ]; then
@@ -1327,7 +1428,10 @@ validate_layer_4() {
         local live_rp
         live_rp=$(aws_connect describe-routing-profile \
             --instance-id "$instance_id" \
-            --routing-profile-id "$rp_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_rp_id
+            eff_rp_id=$(effective_id "$MAP_ROUTINGS" "$rp_id" "$rp_name")
+            --routing-profile-id "${eff_rp_id:-$rp_id}" 2>/dev/null)
         if [ -z "$live_rp" ]; then
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $rp_name ($rp_id)" >&2
@@ -1393,7 +1497,7 @@ validate_layer_4() {
             saved_q_names=$(jq -r '.RoutingProfileQueueConfigSummaryList[]?.QueueName // empty' "$rqs_file" 2>/dev/null | sort)
             live_rqs=$(aws_connect list-routing-profile-queues \
                 --instance-id "$instance_id" \
-                --routing-profile-id "$rp_id" \
+                --routing-profile-id "$eff_rp_id" \
                 --max-items $maxitems 2>/dev/null)
             live_q_names=$(echo "$live_rqs" | jq -r '.RoutingProfileQueueConfigSummaryList[]?.QueueName // empty' 2>/dev/null | sort)
             if [ "$saved_q_names" = "$live_q_names" ]; then
@@ -1464,7 +1568,10 @@ validate_layer_5() {
         local live_sp
         live_sp=$(aws_connect describe-security-profile \
             --instance-id "$instance_id" \
-            --security-profile-id "$sp_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_sp_id
+            eff_sp_id=$(effective_id "$MAP_SECURITY" "$sp_id" "$sp_name")
+            --security-profile-id "${eff_sp_id:-$sp_id}" 2>/dev/null)
         if [ -z "$live_sp" ]; then
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $sp_name ($sp_id)" >&2
@@ -1493,7 +1600,7 @@ validate_layer_5() {
                 saved_perms=$(jq -r '.Permissions[]? // empty' "$perms_file" 2>/dev/null | sort)
                 live_perms_data=$(aws_connect list-security-profile-permissions \
                     --instance-id "$instance_id" \
-                    --security-profile-id "$sp_id" \
+                    --security-profile-id "$eff_sp_id" \
                     --max-items $maxitems 2>/dev/null)
                 live_perms=$(echo "$live_perms_data" | jq -r '.Permissions[]? // empty' 2>/dev/null | sort)
                 if [ "$saved_perms" = "$live_perms" ]; then
@@ -1620,7 +1727,10 @@ validate_layer_7() {
         local live_user
         live_user=$(aws_connect describe-user \
             --instance-id "$instance_id" \
-            --user-id "$user_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_user_id
+            eff_user_id=$(effective_id "$MAP_USERS" "$user_id" "$user_name")
+            --user-id "${eff_user_id:-$user_id}" 2>/dev/null)
         if [ -z "$live_user" ]; then
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $user_name ($user_id)" >&2
@@ -1709,7 +1819,10 @@ validate_layer_8() {
         local live_qc
         live_qc=$(aws_connect describe-quick-connect \
             --instance-id "$instance_id" \
-            --quick-connect-id "$qc_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_qc_id
+            eff_qc_id=$(effective_id "$MAP_QC" "$qc_id" "$qc_name")
+            --quick-connect-id "${eff_qc_id:-$qc_id}" 2>/dev/null)
         if [ -z "$live_qc" ]; then
             exist_fail=$((exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $qc_name ($qc_id)" >&2
@@ -1789,10 +1902,14 @@ validate_layer_9_10() {
 
             while IFS=$'\t' read -r mod_id mod_name; do
                 [ -z "$mod_id" ] && continue
+                # Cross-account: resolve by name
+                local eff_mod_id
+                eff_mod_id=$(effective_id "$MAP_MODULES" "$mod_id" "$mod_name")
+                [ -z "$eff_mod_id" ] && { mod_exist_fail=$((mod_exist_fail + 1)); [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $mod_name" >&2; continue; }
                 local live_mod
                 live_mod=$(aws_connect describe-contact-flow-module \
                     --instance-id "$instance_id" \
-                    --contact-flow-module-id "$mod_id" 2>/dev/null)
+                    --contact-flow-module-id "$eff_mod_id" 2>/dev/null)
                 if [ -z "$live_mod" ]; then
                     mod_exist_fail=$((mod_exist_fail + 1))
                     [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $mod_name" >&2
@@ -1881,7 +1998,10 @@ validate_layer_9_10() {
         local live_flow
         live_flow=$(aws_connect describe-contact-flow \
             --instance-id "$instance_id" \
-            --contact-flow-id "$flow_id" 2>/dev/null)
+            # Cross-account: resolve by name
+            local eff_flow_id
+            eff_flow_id=$(effective_id "$MAP_FLOWS" "$flow_id" "$flow_name")
+            --contact-flow-id "${eff_flow_id:-$flow_id}" 2>/dev/null)
         if [ -z "$live_flow" ]; then
             flow_exist_fail=$((flow_exist_fail + 1))
             [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $flow_name" >&2
@@ -2116,9 +2236,11 @@ validate_layer_14() {
             while IFS=$'\t' read -r as_id as_name; do
                 [ -z "$as_id" ] && continue
                 local live_as
+                local eff_as_id
+                eff_as_id=$(effective_id "$MAP_STATUSES" "$as_id" "$as_name")
                 live_as=$(aws_connect describe-agent-status \
                     --instance-id "$instance_id" \
-                    --agent-status-id "$as_id" 2>/dev/null)
+                    --agent-status-id "${eff_as_id:-$as_id}" 2>/dev/null)
                 if [ -n "$live_as" ]; then
                     as_pass=$((as_pass + 1))
                 else
@@ -2280,8 +2402,10 @@ validate_layer_14() {
                 local vf_id=$(jq -r '.View.Id // empty' "$vf" 2>/dev/null | dos2unix)
                 [ -z "$vf_id" ] && continue
                 local live_view
+                local eff_view_id
+                eff_view_id=$(effective_id "$MAP_VIEWS" "$vf_id" "")
                 live_view=$(aws_connect describe-view \
-                    --instance-id "$instance_id" --view-id "$vf_id" 2>/dev/null)
+                    --instance-id "$instance_id" --view-id "${eff_view_id:-$vf_id}" 2>/dev/null)
                 if [ -n "$live_view" ]; then
                     view_pass=$((view_pass + 1))
                 else
@@ -2733,6 +2857,11 @@ validate_layer_18() {
 if [ -n "$do_preflight" ]; then
     validate_preflight
 else
+    # Build cross-account name→ID maps if targeting a different instance
+    if [ -n "$do_live" ] && [ -n "$CROSS_ACCOUNT" ]; then
+        build_target_maps
+    fi
+
     # Run layers in dependency order
     if [ -n "$do_live" ]; then
         should_run_layer 0 && validate_layer_0
