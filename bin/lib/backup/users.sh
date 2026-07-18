@@ -32,7 +32,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --hierarchy-group-id $hg_id \
             > "$instance_alias_dir/hierarchygroup_$hg_name_encoded.json" || error $LINENO
-    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hierarchy_groups.json" | dos2unix)
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hierarchy_groups.json" | tr -d '\r')
 else
     echo "  No user hierarchy groups found"
     echo "[]" > "$instance_alias_dir/hierarchy_groups.json"
@@ -66,7 +66,7 @@ if [ -s $TEMPFILE ]; then
             --user-id $user_id \
             --max-items $maxitems \
             > "$instance_alias_dir/userProficiencies_$user_name_encoded.json" 2>/dev/null || true
-    done < <(jq -r '.Id + "\t" + .Username' "$instance_alias_dir/users.json" | dos2unix)
+    done < <(jq -r '.Id + "\t" + .Username' "$instance_alias_dir/users.json" | tr -d '\r')
 else
     echo "  No users found"
     echo "[]" > "$instance_alias_dir/users.json"
@@ -94,7 +94,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --authentication-profile-id $ap_id \
             > "$instance_alias_dir/authprofile_$ap_name_encoded.json" 2>/dev/null || true
-    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/auth_profiles.json" | dos2unix)
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/auth_profiles.json" | tr -d '\r')
 else
     echo "  No authentication profiles found"
     echo "[]" > "$instance_alias_dir/auth_profiles.json"

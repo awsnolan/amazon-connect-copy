@@ -31,7 +31,7 @@ while read prompt_id prompt_name; do
         aws_connect describe-prompt \
         --instance-id $instance_id \
         --prompt-id $prompt_id || true
-done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/prompts.json" | dos2unix)
+done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/prompts.json" | tr -d '\r')
 echo "  Prompt details saved"
 
 ############################################################
@@ -66,7 +66,7 @@ while IFS=$'\t' read -r hour_id hour_name; do
         --hours-of-operation-id $hour_id \
         --max-items $maxitems \
         > "$instance_alias_dir/hourOverrides_$hour_name_encoded.json" 2>/dev/null || true
-done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" | dos2unix)
+done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hours.json" | tr -d '\r')
 
 ############################################################
 # Queues
@@ -95,7 +95,7 @@ while IFS=$'\t' read -r queue_id queue_name; do
         --queue-id $queue_id |\
         jq 'del(.Queue.LastModifiedRegion, .Queue.LastModifiedTime)' \
         > "$instance_alias_dir/queue_$queue_name_encoded.json" || error $LINENO
-done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/queues.json" | dos2unix)
+done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/queues.json" | tr -d '\r')
 
 ############################################################
 # Queue → Quick Connect Associations
@@ -109,7 +109,7 @@ while IFS=$'\t' read -r queue_id queue_name; do
         --queue-id $queue_id \
         --max-items $maxitems \
         > "$instance_alias_dir/queueQCs_$queue_name_encoded.json" 2>/dev/null || true
-done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/queues.json" | dos2unix)
+done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/queues.json" | tr -d '\r')
 echo "  Queue quick connect associations saved"
 
 ############################################################
@@ -143,4 +143,4 @@ while IFS=$'\t' read -r routing_id routing_name; do
         --routing-profile-id $routing_id \
         --max-items $maxitems \
         > "$instance_alias_dir/routingQs_$routing_name_encoded.json" || error $LINENO
-done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/routings.json" | dos2unix)
+done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/routings.json" | tr -d '\r')

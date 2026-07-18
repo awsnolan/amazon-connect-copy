@@ -31,7 +31,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --task-template-id $tt_id \
             > "$instance_alias_dir/tasktemplate_$tt_name_encoded.json" || error $LINENO
-    done < <(    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/tasktemplates.json" | dos2unix)
+    done < <(    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/tasktemplates.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No task templates found"
@@ -59,7 +59,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --evaluation-form-id $ef_id \
             > "$instance_alias_dir/evaluationform_$ef_title_encoded.json" || error $LINENO
-    done < <(    jq -r ".EvaluationFormId + \" \" + .Title" "$instance_alias_dir/evaluationforms.json" | dos2unix)
+    done < <(    jq -r ".EvaluationFormId + \" \" + .Title" "$instance_alias_dir/evaluationforms.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No evaluation forms found"
@@ -87,7 +87,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --rule-id $rule_id \
             > "$instance_alias_dir/rule_$rule_name_encoded.json" || error $LINENO
-    done < <(    jq -r ".RuleId + \" \" + .Name" "$instance_alias_dir/rules.json" | dos2unix)
+    done < <(    jq -r ".RuleId + \" \" + .Name" "$instance_alias_dir/rules.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No rules found"
@@ -115,7 +115,7 @@ if [ -s $TEMPFILE ]; then
             aws_connect describe-view \
             --instance-id $instance_id \
             --view-id $view_id || true
-    done < <(    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/views.json" | dos2unix)
+    done < <(    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/views.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No views found"
@@ -143,7 +143,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --vocabulary-id $vocab_id \
             > "$instance_alias_dir/vocabulary_$vocab_name_encoded.json" 2>/dev/null || true
-    done < <(    jq -r ".VocabularyId + \" \" + .VocabularyName" "$instance_alias_dir/vocabularies.json" | dos2unix)
+    done < <(    jq -r ".VocabularyId + \" \" + .VocabularyName" "$instance_alias_dir/vocabularies.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No vocabularies found"
@@ -171,7 +171,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --table-id $dt_id \
             > "$instance_alias_dir/datatable_$dt_name_encoded.json" 2>/dev/null || true
-    done < <(    jq -r ".TableId + \" \" + .TableName" "$instance_alias_dir/datatables.json" | dos2unix)
+    done < <(    jq -r ".TableId + \" \" + .TableName" "$instance_alias_dir/datatables.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No data tables found"

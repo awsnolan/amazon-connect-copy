@@ -31,7 +31,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --email-address-id $ea_id \
             > "$instance_alias_dir/emailaddress_$ea_encoded.json" 2>/dev/null || true
-    done < <(    jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" | dos2unix)
+    done < <(    jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No email addresses found"
@@ -48,7 +48,7 @@ aws_connect describe-instance-attribute \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    attach_enabled=$(jq -r '.Attribute.Value // "false"' $TEMPFILE | dos2unix)
+    attach_enabled=$(jq -r '.Attribute.Value // "false"' $TEMPFILE | tr -d '\r')
     if [ "$attach_enabled" = "true" ]; then
         aws_connect describe-attachment-configuration \
             --instance-id $instance_id \
@@ -87,7 +87,7 @@ if [ -s $TEMPFILE ]; then
         aws_connect describe-phone-number \
             --phone-number-id $pn_id \
             > "$instance_alias_dir/phonenumber_$pn_encoded.json" || error $LINENO
-    done < <(    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" | dos2unix)
+    done < <(    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No phone numbers found"

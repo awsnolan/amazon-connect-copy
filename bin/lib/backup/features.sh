@@ -34,7 +34,7 @@ while read qc_id qc_name; do
         --quick-connect-id $qc_id |\
         jq 'del(.QuickConnect.LastModifiedRegion, .QuickConnect.LastModifiedTime)' \
         > "$instance_alias_dir/quickconnect_$qc_name_encoded.json" || error $LINENO
-done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/quickconnects.json" | dos2unix)
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/quickconnects.json" | tr -d '\r')
 test $? -eq 0 || error
 
 ############################################################
@@ -60,7 +60,7 @@ while read as_id as_name; do
         --instance-id $instance_id \
         --agent-status-id $as_id \
         > "$instance_alias_dir/agentstatus_$as_name_encoded.json" || error $LINENO
-done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/agentstatuses.json" | dos2unix)
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/agentstatuses.json" | tr -d '\r')
 test $? -eq 0 || error
 
 ############################################################
@@ -91,7 +91,7 @@ while read sp_id sp_name; do
         --security-profile-id $sp_id \
         --max-items $maxitems \
         > "$instance_alias_dir/securityprofilePerms_$sp_name_encoded.json" || error $LINENO
-done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/securityprofiles.json" | dos2unix)
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/securityprofiles.json" | tr -d '\r')
 test $? -eq 0 || error
 
 ############################################################
@@ -115,7 +115,7 @@ if [ -s $TEMPFILE ]; then
             aws_connect describe-predefined-attribute \
             --instance-id $instance_id \
             --name "$pa_name" || true
-    done < <(    jq -r ".Name" "$instance_alias_dir/predefinedattributes.json" | dos2unix)
+    done < <(    jq -r ".Name" "$instance_alias_dir/predefinedattributes.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No predefined attributes found"

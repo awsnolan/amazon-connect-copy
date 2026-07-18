@@ -44,7 +44,7 @@ if [ -s $TEMPFILE ]; then
             --max-results 100 \
             $profile_flag \
             > "$instance_alias_dir/cases_templates_$domain_name_encoded.json" 2>/dev/null || true
-    done < <(    jq -r ".domainId + \" \" + .name" "$instance_alias_dir/cases_domains.json" | dos2unix)
+    done < <(    jq -r ".domainId + \" \" + .name" "$instance_alias_dir/cases_domains.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No Connect Cases domains found"
@@ -72,7 +72,7 @@ if [ -s $TEMPFILE ]; then
             --id $camp_id \
             $profile_flag \
             > "$instance_alias_dir/campaign_$camp_name_encoded.json" 2>/dev/null || true
-    done < <(    jq -r ".id + \" \" + .name" "$instance_alias_dir/campaigns.json" | dos2unix)
+    done < <(    jq -r ".id + \" \" + .name" "$instance_alias_dir/campaigns.json" | tr -d '\r')
     test $? -eq 0 || error
 else
     echo "No outbound campaigns found"
@@ -102,7 +102,7 @@ while read module_id module_name; do
         --contact-flow-module-id $module_id > $TEMPCF \
         || error $LINENO "$module_name" "$instance_alias_dir/modules.json"
     if [ -s $TEMPCF ]; then
-        cfm_status=$(jq -r ".ContactFlowModule.Status" $TEMPCF | dos2unix)
+        cfm_status=$(jq -r ".ContactFlowModule.Status" $TEMPCF | tr -d '\r')
         if [ "$cfm_status" == "published" ]; then
             cat $TEMPCF |
             jq -r '.ContactFlowModule.Content' > "$instance_alias_dir/module_$module_name_encoded.json"
@@ -114,7 +114,7 @@ while read module_id module_name; do
             error $LINENO "$module_name" "$instance_alias_dir/modules.json"
         fi
     fi
-done < <(jq -r ".Id + \" \" + .Name" $TEMPFILE | dos2unix)
+done < <(jq -r ".Id + \" \" + .Name" $TEMPFILE | tr -d '\r')
 test $? -eq 0 || error
 
 ############################################################
@@ -149,7 +149,7 @@ while read flow_id flow_name; do
         echo "$flow_name: Contact flow not published"
         error $LINENO "$flow_name" "$instance_alias_dir/flows.json"
     fi
-done < <(jq -r ".Id + \" \" + .Name" $TEMPFILE | dos2unix)
+done < <(jq -r ".Id + \" \" + .Name" $TEMPFILE | tr -d '\r')
 test $? -eq 0 || error
 
 ############################################################
