@@ -258,28 +258,21 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 ### Next
 
-- [ ] **Companion deps tool** (`connect_deps_backup` / `connect_deps_restore`) —
-  Back up and restore Lambda function code, Lex bot definitions, and prompt
-  audio files. See [DR_VALIDATION_SPEC.md](./DR_VALIDATION_SPEC.md) for the full spec.
-- [ ] **Remediation guide in validate output** — step-by-step fix instructions per
-  failure type with AWS documentation links, phone→flow mappings, and user access
-  verification guidance. Suitable for ITSM/runbook inclusion.
 - [ ] **User restore improvements** — `update-user-*` for pre-provisioned users,
   preflight username verification, `--user-password-file` escape hatch
-
-### Planned
-
-- [ ] **Consistent layered output** — unify all scripts to use `━━━ Layer N: Name ━━━`
-  style with timestamps. `--verbose` flag for restore dry-run detail.
-- [ ] **ANSI colour output** — colour-coded PASS/FAIL/WARN/SKIP. `--no-color` to disable.
-- [ ] **Feature-enabled checks in backup** — skip disabled features (Cases, Campaigns,
-  email) gracefully rather than erroring on API calls.
 - [ ] **Flow content normalized diff** (Layers 9.3/10.4) — verify restored flow content
   matches source after ID remapping, not just existence.
 - [ ] **CI/CD pipeline integration** — wire validate JSON output into automated DR
   runbooks to gate DNS failover.
 - [ ] **Integration test harness** — fixture-based test for the full pipeline without
   a live instance.
+
+### Planned
+
+- [ ] **`connect_plan` modularisation** — break into `bin/lib/plan/*.sh` modules
+  matching the backup/restore pattern. Currently 900 lines, file-only, functional.
+- [ ] **Verbose restore output** — `--verbose` flag for restore dry-run detail,
+  showing each API call that would be made.
 
 ### Known Limitations
 
@@ -289,4 +282,17 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
   defaults that intentionally differ — flagged for manual review.
 - Phone numbers cannot be claimed cross-account via API — must be provisioned
   manually on the DR instance.
-- `connect_plan` is not yet modularized (900 lines, file-only, functional).
+
+### Done
+
+- [x] **Companion deps tool** (`connect_deps_backup` / `connect_deps_restore`) —
+  Back up and restore Lambda function code, Lex bot definitions, and prompt audio files.
+- [x] **Feature-enabled checks in backup** — skip disabled features (Cases, Campaigns,
+  email) gracefully rather than erroring on API calls.
+- [x] **ANSI colour output** — colour-coded ✓/✗/⚠/- with `--no-color` flag and
+  `NO_COLOR` env var support. Auto-disables when piped.
+- [x] **Consistent layered output** — all scripts use `section_header()` from
+  `common.sh` with `━━━` style and timestamps.
+- [x] **Remediation guide in validate output** — per-layer fix instructions with AWS
+  documentation links, shown only on FAIL. Covers all 18 layers including critical
+  callouts for users, phone numbers, and external dependencies.
