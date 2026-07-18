@@ -26,6 +26,9 @@ usage() { echo -e "$USAGE" >&2; exit 2; }
 
 version() { echo -e "$SCRIPT_VERSION"; exit; }
 
+# Timestamp for progress output
+ts() { date '+%H:%M:%S'; }
+
 ###############################################################################
 # Hex conversion + path encoding
 ###############################################################################

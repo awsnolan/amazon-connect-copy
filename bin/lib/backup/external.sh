@@ -10,7 +10,7 @@
 ############################################################
 
 echo ""
-echo "━━━ External Systems & Flows ━━━"
+echo "━━━ External Systems & Flows ━━━ $(ts)"
 
 ############################################################
 # Amazon Connect Cases (separate CLI namespace)

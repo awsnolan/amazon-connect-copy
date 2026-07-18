@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-echo "━━━ Instance Foundation ━━━"
+echo "━━━ Instance Foundation ━━━ $(ts)"
 
 ############################################################
 # Instance Attributes (feature flags)
