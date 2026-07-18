@@ -130,8 +130,8 @@ aws_connect_backup() {
     for ii; do
         [[ "$ii" == *" "* ]] && cmd="$cmd \"$ii\"" || cmd="$cmd $ii"
     done
-    echo "aws connect$profile_flag$cmd" >> "${aws_cli_log:-/dev/null}"
-    eval "aws connect --output json$profile_flag$cmd | aws_cli_out_filter" 2> "${TEMPERR:-/dev/null}"
+    echo "aws connect --output json$profile_flag$cmd" >> "${aws_cli_log:-/dev/null}"
+    eval "aws connect --output json$profile_flag$cmd" 2> "${TEMPERR:-/dev/null}"
     local ret=$?
     if [ -s "${TEMPERR:-/dev/null}" ]; then
         cat "$TEMPERR" | tee -a "${aws_cli_log:-/dev/null}" >&2
