@@ -273,4 +273,7 @@ for Disaster Recovery use cases. The following work remains:
 - `connect_validate --target <instance-id>`: validate a backup directory against a
   *different* live instance (the DR target). Currently validates against the source
   instance only. Same comparison logic, just targets API calls at a different
-  instance ID. Required for post-restore DR acceptance testing.
+  instance ID. Required for post-restore DR acceptance testing. **Partially
+  implemented**: API calls reach the correct instance, but lookups use source IDs
+  which don't exist on the target. Needs name-based resolution for cross-account
+  validation where resource IDs differ between source and target.
