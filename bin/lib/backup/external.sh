@@ -26,8 +26,6 @@ if [ -s $TEMPFILE ]; then
     > "$instance_alias_dir/cases_domains.json"
     echo -e "\n$(jq -s "length") Cases domains listed in \"$instance_alias_dir/cases_domains.json\""
 
-    jq -r ".domainId + \" \" + .name" "$instance_alias_dir/cases_domains.json" |
-    dos2unix |
     while read domain_id domain_name; do
         echo "Exporting Cases domain $domain_name"
         domain_name_encoded=$(path_encode "$domain_name")
@@ -46,7 +44,7 @@ if [ -s $TEMPFILE ]; then
             --max-results 100 \
             $profile_flag \
             > "$instance_alias_dir/cases_templates_$domain_name_encoded.json" 2>/dev/null || true
-    done
+    done < <(    jq -r ".domainId + \" \" + .name" "$instance_alias_dir/cases_domains.json" | dos2unix)
     test $? -eq 0 || error
 else
     echo "No Connect Cases domains found"
@@ -67,8 +65,6 @@ if [ -s $TEMPFILE ]; then
     > "$instance_alias_dir/campaigns.json"
     echo -e "\n$(jq -s "length") outbound campaigns listed in \"$instance_alias_dir/campaigns.json\""
 
-    jq -r ".id + \" \" + .name" "$instance_alias_dir/campaigns.json" |
-    dos2unix |
     while read camp_id camp_name; do
         echo "Exporting campaign $camp_name"
         camp_name_encoded=$(path_encode "$camp_name")
@@ -76,7 +72,7 @@ if [ -s $TEMPFILE ]; then
             --id $camp_id \
             $profile_flag \
             > "$instance_alias_dir/campaign_$camp_name_encoded.json" 2>/dev/null || true
-    done
+    done < <(    jq -r ".id + \" \" + .name" "$instance_alias_dir/campaigns.json" | dos2unix)
     test $? -eq 0 || error
 else
     echo "No outbound campaigns found"
@@ -98,8 +94,6 @@ echo -e "\n$(jq -s "length") contact flow modules listed in \"$instance_alias_di
 
 # Export Contact Flow Modules
 cat "$instance_alias_dir/modules.json" > $TEMPFILE
-jq -r ".Id + \" \" + .Name" $TEMPFILE |
-dos2unix |
 while read module_id module_name; do
     echo "Exporting contact flow module $module_name"
     module_name_encoded=$(path_encode "$module_name")
@@ -120,7 +114,7 @@ while read module_id module_name; do
             error $LINENO "$module_name" "$instance_alias_dir/modules.json"
         fi
     fi
-done
+done < <(jq -r ".Id + \" \" + .Name" $TEMPFILE | dos2unix)
 test $? -eq 0 || error
 
 ############################################################
@@ -138,8 +132,6 @@ echo "$(jq -s 'length' "$instance_alias_dir/flows.json") contact flows listed in
 
 # Export Contact Flows
 cat "$instance_alias_dir/flows.json" > $TEMPFILE
-jq -r ".Id + \" \" + .Name" $TEMPFILE |
-dos2unix |
 while read flow_id flow_name; do
     echo "Exporting contact flow $flow_name"
     aws_connect describe-contact-flow \
@@ -157,7 +149,7 @@ while read flow_id flow_name; do
         echo "$flow_name: Contact flow not published"
         error $LINENO "$flow_name" "$instance_alias_dir/flows.json"
     fi
-done
+done < <(jq -r ".Id + \" \" + .Name" $TEMPFILE | dos2unix)
 test $? -eq 0 || error
 
 ############################################################

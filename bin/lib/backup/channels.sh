@@ -24,8 +24,6 @@ if [ -s $TEMPFILE ]; then
     > "$instance_alias_dir/email_addresses.json"
     echo -e "\n$(jq -s "length") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
 
-    jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" |
-    dos2unix |
     while read ea_id ea_address; do
         echo "Exporting email address $ea_address"
         ea_encoded=$(path_encode "$ea_address")
@@ -33,7 +31,7 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --email-address-id $ea_id \
             > "$instance_alias_dir/emailaddress_$ea_encoded.json" 2>/dev/null || true
-    done
+    done < <(    jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" | dos2unix)
     test $? -eq 0 || error
 else
     echo "No email addresses found"
@@ -83,15 +81,13 @@ if [ -s $TEMPFILE ]; then
     > "$instance_alias_dir/phonenumbers.json"
     echo -e "\n$(jq -s "length") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
 
-    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" |
-    dos2unix |
     while read pn_id pn_number; do
         echo "Exporting phone number $pn_number"
         pn_encoded=$(path_encode "$pn_number")
         aws_connect describe-phone-number \
             --phone-number-id $pn_id \
             > "$instance_alias_dir/phonenumber_$pn_encoded.json" || error $LINENO
-    done
+    done < <(    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" | dos2unix)
     test $? -eq 0 || error
 else
     echo "No phone numbers found"

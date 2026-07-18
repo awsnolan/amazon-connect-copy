@@ -25,8 +25,6 @@ jq -r '.PromptSummaryList // [] | sort_by(.Name) | .[]' \
 echo -e "\n$(jq -s "length") prompts listed in \"$instance_alias_dir/prompts.json\""
 
 # Describe each prompt to capture S3 storage location and tags
-jq -r ".Id + \" \" + .Name" "$instance_alias_dir/prompts.json" |
-dos2unix |
 while read prompt_id prompt_name; do
     [ -z "$prompt_id" ] && continue
     prompt_name_encoded=$(path_encode "$prompt_name")
@@ -34,8 +32,7 @@ while read prompt_id prompt_name; do
         aws_connect describe-prompt \
         --instance-id $instance_id \
         --prompt-id $prompt_id || true
-done
-test $? -eq 0 || error
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/prompts.json" | dos2unix)
 echo "Prompt details saved"
 
 ############################################################
@@ -52,8 +49,6 @@ jq -r '[.HoursOfOperationSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]'
 > "$instance_alias_dir/hours.json"
 echo -e "\n$(jq -s "length") hours of operations listed in \"$instance_alias_dir/hours.json\"$jq_prefix_filter_text"
 
-jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hours.json" |
-dos2unix |
 while read hour_id hour_name; do
     echo "Exporting hours of operation $hour_name"
     hour_name_encoded=$(path_encode "$hour_name")
@@ -68,7 +63,7 @@ while read hour_id hour_name; do
         --hours-of-operation-id $hour_id \
         --max-items $maxitems \
         > "$instance_alias_dir/hourOverrides_$hour_name_encoded.json" 2>/dev/null || true
-done
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hours.json" | dos2unix)
 test $? -eq 0 || error
 
 ############################################################
@@ -86,8 +81,6 @@ jq -r '[.QueueSummaryList[] | select(.QueueType != \"AGENT\")$jq_prefix_filter] 
 > "$instance_alias_dir/queues.json"
 echo -e "\n$(jq -s "length") queues listed in \"$instance_alias_dir/queues.json\"$jq_prefix_filter_text"
 
-jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" |
-dos2unix |
 while read queue_id queue_name; do
     echo "Exporting queue $queue_name"
     queue_name_encoded=$(path_encode "$queue_name")
@@ -96,15 +89,13 @@ while read queue_id queue_name; do
         --queue-id $queue_id |\
         jq 'del(.Queue.LastModifiedRegion, .Queue.LastModifiedTime)' \
         > "$instance_alias_dir/queue_$queue_name_encoded.json" || error $LINENO
-done
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" | dos2unix)
 test $? -eq 0 || error
 
 ############################################################
 # Queue → Quick Connect Associations
 ############################################################
 
-jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" |
-dos2unix |
 while read queue_id queue_name; do
     queue_name_encoded=$(path_encode "$queue_name")
     aws_connect list-queue-quick-connects \
@@ -112,7 +103,7 @@ while read queue_id queue_name; do
         --queue-id $queue_id \
         --max-items $maxitems \
         > "$instance_alias_dir/queueQCs_$queue_name_encoded.json" 2>/dev/null || true
-done
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/queues.json" | dos2unix)
 test $? -eq 0 || error
 echo "Queue quick connect associations saved"
 
@@ -130,8 +121,6 @@ jq -r '[.RoutingProfileSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "
 > "$instance_alias_dir/routings.json"
 echo -e "\n$(jq -s "length") routing profiles listed in \"$instance_alias_dir/routings.json\"$jq_prefix_filter_text"
 
-jq -r ".Id + \" \" + .Name" "$instance_alias_dir/routings.json" |
-dos2unix |
 while read routing_id routing_name; do
     echo "Exporting routing profile $routing_name"
     routing_name_encoded=$(path_encode "$routing_name")
@@ -145,5 +134,5 @@ while read routing_id routing_name; do
         --routing-profile-id $routing_id \
         --max-items $maxitems \
         > "$instance_alias_dir/routingQs_$routing_name_encoded.json" || error $LINENO
-done
+done < <(jq -r ".Id + \" \" + .Name" "$instance_alias_dir/routings.json" | dos2unix)
 test $? -eq 0 || error
