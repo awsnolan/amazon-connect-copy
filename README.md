@@ -261,7 +261,8 @@ for Disaster Recovery use cases. The following work remains:
   uses the `━━━ Layer N: Name ━━━` style. The backup, plan, and restore scripts use
   inconsistent heading styles (`━━━ Name ━━━`, `Checking X ...`, section headers with
   `---`). Unify all four scripts to use the same layered output pattern with clear
-  section markers. Also: restore dry-run dumps full JSON for every resource — should
+  section markers. Include timestamp (HH:MM:SS, no date) in each layer header across
+  all scripts. Also: restore dry-run dumps full JSON for every resource — should
   show one-line summaries with a `--verbose` flag for full JSON.
 - ASCII colorizer: add unobtrusive single-line ASCII art to designate PASS/FAIL/WARN/SKIP
   results (green/red/yellow/grey). Opt-in by default, disable with `--no-color` flag.
