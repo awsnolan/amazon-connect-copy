@@ -1086,11 +1086,11 @@ validate_layer_2() {
 
         # 2.1: Existence
         local live_hour
+        # Cross-account: resolve by name
+        local eff_hour_id
+        eff_hour_id=$(effective_id "$MAP_HOURS" "$hour_id" "$hour_name")
         live_hour=$(aws_connect describe-hours-of-operation \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_hour_id
-            eff_hour_id=$(effective_id "$MAP_HOURS" "$hour_id" "$hour_name")
             --hours-of-operation-id "${eff_hour_id:-$hour_id}" 2>/dev/null)
         if [ -z "$live_hour" ]; then
             exist_fail=$((exist_fail + 1))
@@ -1238,11 +1238,11 @@ validate_layer_3() {
 
         # 3.1: Existence
         local live_queue
+        # Cross-account: resolve by name
+        local eff_queue_id
+        eff_queue_id=$(effective_id "$MAP_QUEUES" "$queue_id" "$queue_name")
         live_queue=$(aws_connect describe-queue \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_queue_id
-            eff_queue_id=$(effective_id "$MAP_QUEUES" "$queue_id" "$queue_name")
             --queue-id "${eff_queue_id:-$queue_id}" 2>/dev/null)
         if [ -z "$live_queue" ]; then
             exist_fail=$((exist_fail + 1))
@@ -1426,11 +1426,11 @@ validate_layer_4() {
         [ -z "$rp_id" ] && continue
 
         local live_rp
+        # Cross-account: resolve by name
+        local eff_rp_id
+        eff_rp_id=$(effective_id "$MAP_ROUTINGS" "$rp_id" "$rp_name")
         live_rp=$(aws_connect describe-routing-profile \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_rp_id
-            eff_rp_id=$(effective_id "$MAP_ROUTINGS" "$rp_id" "$rp_name")
             --routing-profile-id "${eff_rp_id:-$rp_id}" 2>/dev/null)
         if [ -z "$live_rp" ]; then
             exist_fail=$((exist_fail + 1))
@@ -1566,11 +1566,11 @@ validate_layer_5() {
         [ -z "$sp_id" ] && continue
 
         local live_sp
+        # Cross-account: resolve by name
+        local eff_sp_id
+        eff_sp_id=$(effective_id "$MAP_SECURITY" "$sp_id" "$sp_name")
         live_sp=$(aws_connect describe-security-profile \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_sp_id
-            eff_sp_id=$(effective_id "$MAP_SECURITY" "$sp_id" "$sp_name")
             --security-profile-id "${eff_sp_id:-$sp_id}" 2>/dev/null)
         if [ -z "$live_sp" ]; then
             exist_fail=$((exist_fail + 1))
@@ -1725,11 +1725,11 @@ validate_layer_7() {
         [ -z "$user_id" ] && continue
 
         local live_user
+        # Cross-account: resolve by name
+        local eff_user_id
+        eff_user_id=$(effective_id "$MAP_USERS" "$user_id" "$user_name")
         live_user=$(aws_connect describe-user \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_user_id
-            eff_user_id=$(effective_id "$MAP_USERS" "$user_id" "$user_name")
             --user-id "${eff_user_id:-$user_id}" 2>/dev/null)
         if [ -z "$live_user" ]; then
             exist_fail=$((exist_fail + 1))
@@ -1817,11 +1817,11 @@ validate_layer_8() {
         [ -z "$qc_id" ] && continue
 
         local live_qc
+        # Cross-account: resolve by name
+        local eff_qc_id
+        eff_qc_id=$(effective_id "$MAP_QC" "$qc_id" "$qc_name")
         live_qc=$(aws_connect describe-quick-connect \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_qc_id
-            eff_qc_id=$(effective_id "$MAP_QC" "$qc_id" "$qc_name")
             --quick-connect-id "${eff_qc_id:-$qc_id}" 2>/dev/null)
         if [ -z "$live_qc" ]; then
             exist_fail=$((exist_fail + 1))
@@ -1996,11 +1996,11 @@ validate_layer_9_10() {
         [ -z "$flow_id" ] && continue
 
         local live_flow
+        # Cross-account: resolve by name
+        local eff_flow_id
+        eff_flow_id=$(effective_id "$MAP_FLOWS" "$flow_id" "$flow_name")
         live_flow=$(aws_connect describe-contact-flow \
             --instance-id "$instance_id" \
-            # Cross-account: resolve by name
-            local eff_flow_id
-            eff_flow_id=$(effective_id "$MAP_FLOWS" "$flow_id" "$flow_name")
             --contact-flow-id "${eff_flow_id:-$flow_id}" 2>/dev/null)
         if [ -z "$live_flow" ]; then
             flow_exist_fail=$((flow_exist_fail + 1))
