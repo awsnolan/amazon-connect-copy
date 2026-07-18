@@ -273,6 +273,12 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
   matching the backup/restore pattern. Currently 900 lines, file-only, functional.
 - [ ] **Verbose restore output** — `--verbose` flag for restore dry-run detail,
   showing each API call that would be made.
+- [ ] **Colour-wire backup/restore/plan** — use `C_PASS`/`C_FAIL` on individual
+  operation output lines (infrastructure already in `common.sh`, just needs wiring).
+- [ ] **CI/CD pipeline integration** — wire validate JSON output into automated DR
+  runbooks to gate DNS failover.
+- [ ] **Integration test harness** — fixture-based test for the full pipeline without
+  a live instance.
 
 ### Known Limitations
 
