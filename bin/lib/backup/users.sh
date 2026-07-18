@@ -20,25 +20,21 @@ aws_connect list-user-hierarchy-groups \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".UserHierarchyGroupSummaryList // [] | .[]" |
-    jq -s "sort_by(.Name) | .[]" \
+    jq -r '.UserHierarchyGroupSummaryList // [] | sort_by(.Name) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/hierarchy_groups.json"
-    echo -e "\n$(jq -s "length") user hierarchy groups listed in \"$instance_alias_dir/hierarchy_groups.json\""
+    echo "$(jq -s 'length' "$instance_alias_dir/hierarchy_groups.json") user hierarchy groups"
 
-    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/hierarchy_groups.json" |
-    dos2unix |
     while read hg_id hg_name; do
-        echo "Exporting hierarchy group $hg_name"
+        [ -z "$hg_id" ] && continue
+        echo "  Exporting hierarchy group $hg_name"
         hg_name_encoded=$(path_encode "$hg_name")
         aws_connect describe-user-hierarchy-group \
             --instance-id $instance_id \
             --hierarchy-group-id $hg_id \
             > "$instance_alias_dir/hierarchygroup_$hg_name_encoded.json" || error $LINENO
-    done
-    test $? -eq 0 || error
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/hierarchy_groups.json" | dos2unix)
 else
-    echo "No user hierarchy groups found"
+    echo "  No user hierarchy groups found"
     echo "[]" > "$instance_alias_dir/hierarchy_groups.json"
 fi
 
@@ -52,16 +48,13 @@ aws_connect list-users \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".UserSummaryList // [] | .[]" |
-    jq -s "sort_by(.Username) | .[]" \
+    jq -r '.UserSummaryList // [] | sort_by(.Username) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/users.json"
-    echo -e "\n$(jq -s "length") users listed in \"$instance_alias_dir/users.json\""
+    echo "$(jq -s 'length' "$instance_alias_dir/users.json") users"
 
-    jq -r ".Id + \" \" + .Username" "$instance_alias_dir/users.json" |
-    dos2unix |
-    while read user_id user_name; do
-        echo "Exporting user $user_name"
+    while IFS=$'\t' read -r user_id user_name; do
+        [ -z "$user_id" ] && continue
+        echo "  Exporting user $user_name"
         user_name_encoded=$(path_encode "$user_name")
         aws_connect describe-user \
             --instance-id $instance_id \
@@ -73,10 +66,9 @@ if [ -s $TEMPFILE ]; then
             --user-id $user_id \
             --max-items $maxitems \
             > "$instance_alias_dir/userProficiencies_$user_name_encoded.json" 2>/dev/null || true
-    done
-    test $? -eq 0 || error
+    done < <(jq -r '.Id + "\t" + .Username' "$instance_alias_dir/users.json" | dos2unix)
 else
-    echo "No users found"
+    echo "  No users found"
     echo "[]" > "$instance_alias_dir/users.json"
 fi
 
@@ -90,24 +82,20 @@ aws_connect list-authentication-profiles \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".AuthenticationProfileSummaryList // [] | .[]" |
-    jq -s "sort_by(.Name) | .[]" \
+    jq -r '.AuthenticationProfileSummaryList // [] | sort_by(.Name) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/auth_profiles.json"
-    echo -e "\n$(jq -s "length") authentication profiles listed in \"$instance_alias_dir/auth_profiles.json\""
+    echo "$(jq -s 'length' "$instance_alias_dir/auth_profiles.json") authentication profiles"
 
-    jq -r ".Id + \" \" + .Name" "$instance_alias_dir/auth_profiles.json" |
-    dos2unix |
-    while read ap_id ap_name; do
-        echo "Exporting authentication profile $ap_name"
+    while IFS=$'\t' read -r ap_id ap_name; do
+        [ -z "$ap_id" ] && continue
+        echo "  Exporting authentication profile $ap_name"
         ap_name_encoded=$(path_encode "$ap_name")
         aws_connect describe-authentication-profile \
             --instance-id $instance_id \
             --authentication-profile-id $ap_id \
             > "$instance_alias_dir/authprofile_$ap_name_encoded.json" 2>/dev/null || true
-    done
-    test $? -eq 0 || error
+    done < <(jq -r '.Id + "\t" + .Name' "$instance_alias_dir/auth_profiles.json" | dos2unix)
 else
-    echo "No authentication profiles found"
+    echo "  No authentication profiles found"
     echo "[]" > "$instance_alias_dir/auth_profiles.json"
 fi

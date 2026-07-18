@@ -66,9 +66,7 @@ aws_connect list-integration-associations \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".IntegrationAssociationSummaryList // [] | .[]" |
-    jq -s "sort_by(.IntegrationAssociationId) | .[]" \
+        jq -r '.IntegrationAssociationSummaryList // [] | sort_by(.IntegrationAssociationId) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/integrations.json"
     echo " $(jq -s 'length' "$instance_alias_dir/integrations.json") found"
 else
@@ -87,9 +85,7 @@ aws_connect list-approved-origins \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".Origins // [] | .[]" |
-    jq -s "sort | .[]" \
+        jq -r '.Origins // [] | sort | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/approved_origins.json"
     echo " $(jq -s 'length' "$instance_alias_dir/approved_origins.json") found"
 else
@@ -108,9 +104,7 @@ aws_connect list-security-keys \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".SecurityKeysList // [] | .[]" |
-    jq -s "sort_by(.AssociationId) | .[]" \
+        jq -r '.SecurityKeysList // [] | sort_by(.AssociationId) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/security_keys.json"
     echo " $(jq -s 'length' "$instance_alias_dir/security_keys.json") found"
 else
@@ -129,8 +123,7 @@ aws_connect list-lambda-functions \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r '.LambdaFunctions // [] | sort | .[]' |
+    jq -r '.LambdaFunctions // [] | sort | .[]' "$TEMPFILE" |
     jq -Rs '[split("\n") | .[] | select(. != "")]' \
     > "$instance_alias_dir/lambda_associations.json"
     echo " $(jq 'length' "$instance_alias_dir/lambda_associations.json") found"

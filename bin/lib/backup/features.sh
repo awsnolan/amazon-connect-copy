@@ -19,9 +19,7 @@ aws_connect list-quick-connects \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-cat $TEMPFILE |
-jq -r ".QuickConnectSummaryList[]$jq_prefix_filter" |
-jq -s "sort_by(.Name) | .[]" \
+jq -r '[.QuickConnectSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
 > "$instance_alias_dir/quickconnects.json"
 echo -e "\n$(jq -s "length") quick connects listed in \"$instance_alias_dir/quickconnects.json\"$jq_prefix_filter_text"
 
@@ -47,9 +45,7 @@ aws_connect list-agent-statuses \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-cat $TEMPFILE |
-jq -r ".AgentStatusSummaryList[] | select(.Type == \"CUSTOM\")$jq_prefix_filter" |
-jq -s "sort_by(.Name) | .[]" \
+jq -r '[.AgentStatusSummaryList[] | select(.Type == \"CUSTOM\")$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
 > "$instance_alias_dir/agentstatuses.json"
 echo -e "\n$(jq -s "length") agent statuses listed in \"$instance_alias_dir/agentstatuses.json\"$jq_prefix_filter_text"
 
@@ -74,9 +70,7 @@ aws_connect list-security-profiles \
     --max-items $maxitems \
     > $TEMPFILE || error $LINENO
 
-cat $TEMPFILE |
-jq -r ".SecurityProfileSummaryList[]$jq_prefix_filter" |
-jq -s "sort_by(.Name) | .[]" \
+jq -r '[.SecurityProfileSummaryList[]$jq_prefix_filter] | sort_by(.Name) | .[]' "$TEMPFILE" \
 > "$instance_alias_dir/securityprofiles.json"
 echo -e "\n$(jq -s "length") security profiles listed in \"$instance_alias_dir/securityprofiles.json\"$jq_prefix_filter_text"
 
@@ -107,9 +101,7 @@ aws_connect list-predefined-attributes \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-    cat $TEMPFILE |
-    jq -r ".PredefinedAttributeSummaryList // [] | .[]" |
-    jq -s "sort_by(.Name) | .[]" \
+        jq -r '.PredefinedAttributeSummaryList // [] | sort_by(.Name) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/predefinedattributes.json"
     echo -e "\n$(jq -s "length") predefined attributes listed in \"$instance_alias_dir/predefinedattributes.json\""
 
