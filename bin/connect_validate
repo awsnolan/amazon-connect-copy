@@ -2774,6 +2774,7 @@ validate_layer_17() {
             pass "17.3" "Flow → flow references ($ref_flow_pass/$total_flow_ref)"
         elif [ "$ref_flow_fail" -eq 0 ] && [ "$ref_flow_warn" -gt 0 ]; then
             warn "17.3" "Flow → flow references" "$ref_flow_warn pre-existing dead reference(s) on instance"
+            [ -z "$JSON_OUTPUT" ] && echo -e "  ${C_SKIP}       (not caused by restore — clean up in flow designer if desired)${C_RESET}"
         else
             fail "17.3" "Flow → flow references" "$ref_flow_fail of $total_flow_ref unresolved"
         fi
