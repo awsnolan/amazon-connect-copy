@@ -274,6 +274,29 @@ for Disaster Recovery use cases. The following work remains:
   5. Consider adding a `--user-password-file` flag to restore that supplies temporary
      passwords for user creation (reset on first login) as an escape hatch for
      Connect-managed (non-SSO) instances.
+- **Remediation guide in validate output.** When failures exist, print a categorised
+  step-by-step remediation section at the end (after Results). Requirements:
+  - Per failure type, provide numbered operator steps (not just "what's wrong" but
+    "how to fix it")
+  - Include AWS documentation links for each manual action category:
+    - Phone numbers: https://docs.aws.amazon.com/connect/latest/adminguide/claim-phone-number.html
+    - Users/Identity Center: https://docs.aws.amazon.com/singlesignon/latest/userguide/
+    - Security profiles: https://docs.aws.amazon.com/connect/latest/adminguide/security-profiles.html
+    - Queue caller config: https://docs.aws.amazon.com/connect/latest/adminguide/queues-callerid.html
+  - For phone numbers: be explicit about which number maps to which contact flow
+    (data is in the backup's `phonenumber_*.json` files — extract TargetArn and
+    resolve to flow name)
+  - For users: exact username match is necessary but NOT sufficient. The user must
+    also be in the correct Identity Center group/assignment to access the Connect
+    instance. Document that the operator needs to verify both username AND instance
+    access (the user must appear in `list-users` on the target, not just exist in
+    Identity Center)
+  - For security profiles: clarify that default profiles (Admin, Agent, CCM) have
+    instance-specific defaults that intentionally differ — operator should decide
+    whether to align or accept differences
+  - Links should be suitable for inclusion in ITSM tools, change records, or
+    runbook documentation
+  - Only print when failures exist; omit section entirely on clean PASS
 - **Consistent layered output across all scripts.** Currently only `connect_validate`
   uses the `━━━ Layer N: Name ━━━` style. The backup, plan, and restore scripts use
   inconsistent heading styles (`━━━ Name ━━━`, `Checking X ...`, section headers with
