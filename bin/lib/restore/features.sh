@@ -223,7 +223,7 @@ else
         echo "Updating $as_json"
 
         as_id_b=$(jq -r ".AgentStatus.AgentStatusId" "$instance_alias_dir_b/$as_json" | dos2unix)
-        as_order=$(jq -r ".AgentStatus.DisplayOrder" "$instance_alias_dir_a/$as_json" | dos2unix)
+        as_order=$(jq -r ".AgentStatus.DisplayOrder // empty" "$instance_alias_dir_a/$as_json" | dos2unix)
         as_desc=$(jq -r ".AgentStatus.Description | select(. != null)" "$instance_alias_dir_a/$as_json" | dos2unix)
         as_state=$(jq -r ".AgentStatus.State" "$instance_alias_dir_a/$as_json" | dos2unix)
 
@@ -249,7 +249,7 @@ EOD
         aws_connect update-agent-status \
             --instance-id $instance_id_b \
             --agent-status-id $as_id_b \
-            --display-order $as_order \
+            ${as_order:+--display-order $as_order} \
             --state $as_state || error $LINENO
 
         aws_connect describe-agent-status \
