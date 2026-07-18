@@ -389,7 +389,7 @@ else
 
         cat "$instance_alias_dir_a/$view_json" |
         jq --arg iid $instance_id_b \
-            ".View | del(.Id, .Arn, .Version, .VersionDescription, .CreatedTime, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+            ".View | del(.Id, .Arn, .Version, .VersionDescription, .CreatedTime, .LastModifiedTime, .Type, .ViewContentSha256) | .Content |= del(.InputSchema) | . + { InstanceId: \$iid }" |
         sed -f "$helper_sed" > "$helper/$view_json"
 
         cat <<EOD >> "$helper_log"
@@ -454,7 +454,7 @@ else
 
         cat "$instance_alias_dir_a/$view_json" |
         jq --arg iid $instance_id_b \
-            ".View | del(.Arn, .Version, .VersionDescription, .CreatedTime, .LastModifiedTime) | . + { InstanceId: \$iid }" |
+            ".View | del(.Arn, .Version, .VersionDescription, .CreatedTime, .LastModifiedTime, .Type, .ViewContentSha256) | .Content |= del(.InputSchema) | . + { InstanceId: \$iid }" |
         sed -f "$helper_sed" > "$helper/$view_json"
 
         cat <<EOD >> "$helper_log"
