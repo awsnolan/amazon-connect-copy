@@ -669,7 +669,10 @@ validate_layer_0() {
 
             # 0.1 + 0.2: Existence and state
             local func_info
-            func_info=$(aws_lambda get-function --function-name "$arn" 2>/dev/null)
+            # Cross-account: look up by function name, not source ARN
+            local lookup_name="$arn"
+            [ -n "$CROSS_ACCOUNT" ] && lookup_name="$func_name"
+            func_info=$(aws_lambda get-function --function-name "$lookup_name" 2>/dev/null)
             if [ -z "$func_info" ]; then
                 lambda_fail=$((lambda_fail + 1))
                 [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $func_name ($arn)" >&2
@@ -703,7 +706,7 @@ validate_layer_0() {
 
             # 0.5: Connect invoke permission
             local policy
-            policy=$(aws_lambda get-policy --function-name "$arn" 2>/dev/null)
+            policy=$(aws_lambda get-policy --function-name "$lookup_name" 2>/dev/null)
             if [ -n "$policy" ]; then
                 local has_connect_perm
                 # Policy is a JSON string field; parse and check for connect.amazonaws.com principal
@@ -762,6 +765,13 @@ validate_layer_0() {
             # 0.8 + 0.9: Existence and status
             local bot_info
             bot_info=$(aws_lex_v2 describe-bot --bot-id "$bot_id" 2>/dev/null)
+            # Cross-account: bot ID differs, search by name
+            if [ -z "$bot_info" ] && [ -n "$CROSS_ACCOUNT" ]; then
+                local target_bot_id
+                target_bot_id=$(aws_lex_v2 list-bots 2>/dev/null | \
+                    jq -r ".botSummaries[] | select(.botName == \"$bot_name\") | .botId" 2>/dev/null | head -1)
+                [ -n "$target_bot_id" ] && bot_info=$(aws_lex_v2 describe-bot --bot-id "$target_bot_id" 2>/dev/null)
+            fi
             if [ -z "$bot_info" ]; then
                 lex_fail=$((lex_fail + 1))
                 [ -z "$JSON_OUTPUT" ] && echo "         → Missing: $bot_name (bot_id=$bot_id)" >&2
@@ -2401,9 +2411,10 @@ validate_layer_14() {
                 [ -f "$vf" ] || continue
                 local vf_id=$(jq -r '.View.Id // empty' "$vf" 2>/dev/null | dos2unix)
                 [ -z "$vf_id" ] && continue
+                local vf_name=$(jq -r '.View.Name // empty' "$vf" 2>/dev/null | dos2unix)
                 local live_view
                 local eff_view_id
-                eff_view_id=$(effective_id "$MAP_VIEWS" "$vf_id" "")
+                eff_view_id=$(effective_id "$MAP_VIEWS" "$vf_id" "$vf_name")
                 live_view=$(aws_connect describe-view \
                     --instance-id "$instance_id" --view-id "${eff_view_id:-$vf_id}" 2>/dev/null)
                 if [ -n "$live_view" ]; then
