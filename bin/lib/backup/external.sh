@@ -24,7 +24,7 @@ aws connectcases list-domains \
 if [ -s $TEMPFILE ]; then
         jq -r '.domains // [] | sort_by(.name) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/cases_domains.json"
-    echo -e "\n$(jq -s "length") Cases domains listed in \"$instance_alias_dir/cases_domains.json\""
+    echo -e "\n$(jq -s "length" "$instance_alias_dir/cases_domains.json") Cases domains listed in \"$instance_alias_dir/cases_domains.json\""
 
     while read domain_id domain_name; do
         echo "Exporting Cases domain $domain_name"
@@ -63,7 +63,7 @@ aws connect-campaigns-v2 list-campaigns \
 if [ -s $TEMPFILE ]; then
         jq -r '.campaignSummaryList // [] | sort_by(.name) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/campaigns.json"
-    echo -e "\n$(jq -s "length") outbound campaigns listed in \"$instance_alias_dir/campaigns.json\""
+    echo -e "\n$(jq -s "length" "$instance_alias_dir/campaigns.json") outbound campaigns listed in \"$instance_alias_dir/campaigns.json\""
 
     while read camp_id camp_name; do
         echo "Exporting campaign $camp_name"
@@ -90,7 +90,7 @@ aws_connect list-contact-flow-modules \
 
 jq -r "[.ContactFlowModulesSummaryList[]${contact_flow_prefix_filter}${jq_prefix_filter}] | sort_by(.Name) | .[]" "$TEMPFILE" \
 > "$instance_alias_dir/modules.json"
-echo -e "\n$(jq -s "length") contact flow modules listed in \"$instance_alias_dir/modules.json\"$contact_flow_prefix_text$jq_prefix_filter_text"
+echo -e "\n$(jq -s "length" "$instance_alias_dir/modules.json") contact flow modules listed in \"$instance_alias_dir/modules.json\"$contact_flow_prefix_text$jq_prefix_filter_text"
 
 # Export Contact Flow Modules
 cat "$instance_alias_dir/modules.json" > $TEMPFILE

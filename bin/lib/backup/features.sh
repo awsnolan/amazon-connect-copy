@@ -106,7 +106,7 @@ aws_connect list-predefined-attributes \
 if [ -s $TEMPFILE ]; then
         jq -r '.PredefinedAttributeSummaryList // [] | sort_by(.Name) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/predefinedattributes.json"
-    echo -e "\n$(jq -s "length") predefined attributes listed in \"$instance_alias_dir/predefinedattributes.json\""
+    echo -e "\n$(jq -s "length" "$instance_alias_dir/predefinedattributes.json") predefined attributes listed in \"$instance_alias_dir/predefinedattributes.json\""
 
     while read pa_name; do
         echo "Exporting predefined attribute $pa_name"

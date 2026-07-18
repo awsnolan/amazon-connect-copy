@@ -22,7 +22,7 @@ aws_connect search-email-addresses \
 if [ -s $TEMPFILE ]; then
         jq -r '.EmailAddresses // [] | sort_by(.EmailAddress) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/email_addresses.json"
-    echo -e "\n$(jq -s "length") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
+    echo -e "\n$(jq -s "length" "$instance_alias_dir/email_addresses.json") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
 
     while read ea_id ea_address; do
         echo "Exporting email address $ea_address"
@@ -79,7 +79,7 @@ aws_connect list-phone-numbers-v2 \
 if [ -s $TEMPFILE ]; then
         jq -r '.ListPhoneNumbersSummaryList // [] | sort_by(.PhoneNumber) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/phonenumbers.json"
-    echo -e "\n$(jq -s "length") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
+    echo -e "\n$(jq -s "length" "$instance_alias_dir/phonenumbers.json") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
 
     while read pn_id pn_number; do
         echo "Exporting phone number $pn_number"
