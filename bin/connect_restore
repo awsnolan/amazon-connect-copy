@@ -14,7 +14,7 @@ LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
 AWS_CLI_MAX_QUEUE_CONFIGS=10
 
 USAGE=$(cat <<EOD
-Usage: $(basename $0) [-?dev] [--only sections] [--skip sections] helper
+Usage: $(basename $0) [-?dev] [--only sections] [--skip sections] [--user-password-file file] helper
     Restore Amazon Connect instance A to instance B safely, based on the
     connect_backup and connect_plan results, under the helper directory
     creating new components in helper.new, updating old components in helper.old,
@@ -26,6 +26,11 @@ Usage: $(basename $0) [-?dev] [--only sections] [--skip sections] helper
     -v      Show version of this script
     --only sections  Run only these sections (comma-separated)
     --skip sections  Skip these sections (comma-separated)
+    --user-password-file file
+                     CSV file mapping username to password for user creation
+                     (same-account only). Format: username,password (one per line).
+                     Users in this file will be CREATED if missing on target.
+    --verbose        Show detailed API call info during dry-run
     -?      Help
 
     Sections: preflight, instance, hours, queues, routing, flows, features, supporting, channels
@@ -34,6 +39,12 @@ EOD
 
 # Override aws_connect to use restore variant
 aws_connect() { aws_connect_restore "$@"; }
+
+# Verbose output helper — shows API call detail when --verbose is set
+verbose_detail() {
+    [ -z "$verbose" ] && return 0
+    echo -e "  ${C_SKIP}    ↳ $*${C_RESET}"
+}
 
 # Lex bot substitution helper (carried over from original)
 sub_lex_bot() {
@@ -123,9 +134,11 @@ touch $TEMPLIST
 
 actionLead="# Action -"
 dryrun=
+verbose=
 ignore_improper_extended_ascii=
 ONLY_SECTIONS=
 SKIP_SECTIONS=
+USER_PASSWORD_FILE=
 
 # Handle --only and --skip before getopts
 args=()
@@ -133,6 +146,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
     --only) ONLY_SECTIONS="${2//,/ }"; shift 2;;
     --skip) SKIP_SECTIONS="${2//,/ }"; shift 2;;
+    --user-password-file) USER_PASSWORD_FILE="$2"; shift 2;;
+    --verbose) verbose=on; shift;;
     *)      args+=("$1"); shift;;
     esac
 done

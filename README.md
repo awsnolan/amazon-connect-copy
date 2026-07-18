@@ -258,27 +258,12 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 ### Next
 
-- [ ] **User restore improvements** — `update-user-*` for pre-provisioned users,
-  preflight username verification, `--user-password-file` escape hatch
-- [ ] **Flow content normalized diff** (Layers 9.3/10.4) — verify restored flow content
-  matches source after ID remapping, not just existence.
 - [ ] **CI/CD pipeline integration** — wire validate JSON output into automated DR
   runbooks to gate DNS failover.
 - [ ] **Integration test harness** — fixture-based test for the full pipeline without
   a live instance.
-
-### Planned
-
-- [ ] **`connect_plan` modularisation** — break into `bin/lib/plan/*.sh` modules
-  matching the backup/restore pattern. Currently 900 lines, file-only, functional.
-- [ ] **Verbose restore output** — `--verbose` flag for restore dry-run detail,
-  showing each API call that would be made.
-- [ ] **Colour-wire backup/restore/plan** — use `C_PASS`/`C_FAIL` on individual
-  operation output lines (infrastructure already in `common.sh`, just needs wiring).
-- [ ] **CI/CD pipeline integration** — wire validate JSON output into automated DR
-  runbooks to gate DNS failover.
-- [ ] **Integration test harness** — fixture-based test for the full pipeline without
-  a live instance.
+- [ ] **Scheduled backup automation** — CodeBuild on a schedule with S3 storage and
+  lifecycle retention. See [BACKLOG.md](./BACKLOG.md).
 
 ### Known Limitations
 
@@ -291,6 +276,21 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 ### Done
 
+- [x] **User restore improvements** — `update-user-*` for pre-provisioned users,
+  preflight username verification, skip missing users gracefully.
+- [x] **`--user-password-file` escape hatch** — for same-account restores where
+  `create-user` is viable. CSV maps usernames to passwords.
+- [x] **Flow content normalized diff** (Layers 9.3/10.4) — verify restored flow
+  content matches source after ID/ARN normalization.
+- [x] **`connect_plan` modularisation** — split into `bin/lib/plan/*.sh` modules.
+  Main script is <100 lines. `--only`/`--skip` flags work.
+- [x] **`connect_validate` modularisation** — split into orchestrator +
+  `bin/lib/validate/*.sh` per-layer files. 18 layers, 90%+ of DR spec covered.
+- [x] **Verbose restore output** — `--verbose` flag shows API call detail in dry-run.
+- [x] **Colour-wire restore output** — `C_PASS`/`C_FAIL`/`C_WARN`/`C_SKIP` on
+  individual operation lines.
+- [x] **CodeBuild buildspec updated** — v2.0.0 CLI conventions, preflight check,
+  cross-account support, validation gate.
 - [x] **Companion deps tool** (`connect_deps_backup` / `connect_deps_restore`) —
   Back up and restore Lambda function code, Lex bot definitions, and prompt audio files.
 - [x] **Feature-enabled checks in backup** — skip disabled features (Cases, Campaigns,

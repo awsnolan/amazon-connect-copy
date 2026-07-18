@@ -14,11 +14,11 @@ live_status=$(aws_connect describe-instance --instance-id "$instance_id_b" 2>/de
     jq -r '.Instance.InstanceStatus // empty' | tr -d '\r')
 
 if [ "$live_status" = "ACTIVE" ]; then
-    echo "  ✓ Target instance $instance_alias_b is ACTIVE (id=$instance_id_b)"
+    echo -e "  ${C_PASS}✓ Target instance $instance_alias_b is ACTIVE (id=$instance_id_b)${C_RESET}"
 elif [ -n "$dryrun" ]; then
     echo "  - Target instance not reachable (dry-run mode, continuing)"
 else
-    echo "  ✗ Target instance $instance_alias_b is NOT reachable or not ACTIVE (status=$live_status)" >&2
+    echo -e "  ${C_FAIL}✗ Target instance $instance_alias_b is NOT reachable or not ACTIVE (status=$live_status)${C_RESET}" >&2
     echo "" >&2
     echo "The target Amazon Connect instance must exist and be in ACTIVE state before" >&2
     echo "running connect_restore. Instance creation is not automated — provision the" >&2
@@ -50,6 +50,63 @@ else
         prompt_name=${prompt_name%.json}
         manual_action "Prompts" "Upload prompt '$prompt_name' to target instance"
     done
+fi
+
+
+############################################################
+#
+# Pre-flight: User Availability Check
+#
+
+cat <<EOD
+
+Users
+-----
+EOD
+
+if [ -s "$instance_alias_dir_a/users.json" ]; then
+    source_user_count=$(jq -s 'length' "$instance_alias_dir_a/users.json")
+
+    # Get target user list once
+    if [ -z "$dryrun" ]; then
+        aws_connect list-users \
+            --instance-id "$instance_id_b" 2>/dev/null | \
+            jq -r '.UserSummaryList[].Username // empty' | tr -d '\r' | sort > "$TEMPFILE"_target_users
+    else
+        # In dry-run, use local target backup files
+        jq -r '.User.Username // empty' "$instance_alias_dir_b"/user_*.json 2>/dev/null | tr -d '\r' | sort > "$TEMPFILE"_target_users
+    fi
+
+    rm -f "$TEMPFILE"_missing_users
+    jq -r '.Username' "$instance_alias_dir_a/users.json" | dos2unix |
+    while read src_username; do
+        [ -z "$src_username" ] && continue
+        if ! grep -qx "$src_username" "$TEMPFILE"_target_users 2>/dev/null; then
+            echo "$src_username" >> "$TEMPFILE"_missing_users
+        fi
+    done
+    rm -f "$TEMPFILE"_target_users
+
+    missing_count=0
+    missing_list=""
+    if [ -f "$TEMPFILE"_missing_users ] && [ -s "$TEMPFILE"_missing_users ]; then
+        missing_count=$(wc -l < "$TEMPFILE"_missing_users | tr -d ' ')
+        missing_list=$(paste -sd', ' "$TEMPFILE"_missing_users)
+        rm -f "$TEMPFILE"_missing_users
+    else
+        rm -f "$TEMPFILE"_missing_users
+    fi
+
+    if [ "$missing_count" -gt 0 ]; then
+        echo -e "  ${C_WARN}⚠ $missing_count of $source_user_count source users missing on target instance${C_RESET}"
+        echo "  Missing: $missing_list"
+        echo "  → Pre-create via Identity Center or Connect console before restore"
+        manual_action "Users" "Pre-create $missing_count missing user(s) on target: $missing_list"
+    else
+        echo -e "  ${C_PASS}✓ All $source_user_count source users exist on target instance${C_RESET}"
+    fi
+else
+    echo "  No users in source backup"
 fi
 
 
