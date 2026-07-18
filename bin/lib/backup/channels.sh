@@ -22,7 +22,7 @@ aws_connect search-email-addresses \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".EmailAddresses // [] | .[]" |
-    jq -s "sort_by(.EmailAddress) | .[]" |
+    jq -s "sort_by(.EmailAddress) | .[]" \
     > "$instance_alias_dir/email_addresses.json"
     echo -e "\n$(jq -s "length") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
 
@@ -83,7 +83,7 @@ aws_connect list-phone-numbers-v2 \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".ListPhoneNumbersSummaryList // [] | .[]" |
-    jq -s "sort_by(.PhoneNumber) | .[]" |
+    jq -s "sort_by(.PhoneNumber) | .[]" \
     > "$instance_alias_dir/phonenumbers.json"
     echo -e "\n$(jq -s "length") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
 

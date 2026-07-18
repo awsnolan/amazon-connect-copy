@@ -22,7 +22,7 @@ aws_connect list-user-hierarchy-groups \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".UserHierarchyGroupSummaryList // [] | .[]" |
-    jq -s "sort_by(.Name) | .[]" |
+    jq -s "sort_by(.Name) | .[]" \
     > "$instance_alias_dir/hierarchy_groups.json"
     echo -e "\n$(jq -s "length") user hierarchy groups listed in \"$instance_alias_dir/hierarchy_groups.json\""
 
@@ -54,7 +54,7 @@ aws_connect list-users \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".UserSummaryList // [] | .[]" |
-    jq -s "sort_by(.Username) | .[]" |
+    jq -s "sort_by(.Username) | .[]" \
     > "$instance_alias_dir/users.json"
     echo -e "\n$(jq -s "length") users listed in \"$instance_alias_dir/users.json\""
 
@@ -92,7 +92,7 @@ aws_connect list-authentication-profiles \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".AuthenticationProfileSummaryList // [] | .[]" |
-    jq -s "sort_by(.Name) | .[]" |
+    jq -s "sort_by(.Name) | .[]" \
     > "$instance_alias_dir/auth_profiles.json"
     echo -e "\n$(jq -s "length") authentication profiles listed in \"$instance_alias_dir/auth_profiles.json\""
 

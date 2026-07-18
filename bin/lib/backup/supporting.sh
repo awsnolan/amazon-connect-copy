@@ -22,7 +22,7 @@ aws_connect list-task-templates \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".TaskTemplates[]$jq_prefix_filter" |
-    jq -s "sort_by(.Name) | .[]" |
+    jq -s "sort_by(.Name) | .[]" \
     > "$instance_alias_dir/tasktemplates.json"
     echo -e "\n$(jq -s "length") task templates listed in \"$instance_alias_dir/tasktemplates.json\"$jq_prefix_filter_text"
 
@@ -54,7 +54,7 @@ aws_connect list-evaluation-forms \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".EvaluationFormSummaryList[]$jq_prefix_filter" |
-    jq -s "sort_by(.Title) | .[]" |
+    jq -s "sort_by(.Title) | .[]" \
     > "$instance_alias_dir/evaluationforms.json"
     echo -e "\n$(jq -s "length") evaluation forms listed in \"$instance_alias_dir/evaluationforms.json\"$jq_prefix_filter_text"
 
@@ -86,7 +86,7 @@ aws_connect list-rules \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".RuleSummaryList[]$jq_prefix_filter" |
-    jq -s "sort_by(.Name) | .[]" |
+    jq -s "sort_by(.Name) | .[]" \
     > "$instance_alias_dir/rules.json"
     echo -e "\n$(jq -s "length") rules listed in \"$instance_alias_dir/rules.json\"$jq_prefix_filter_text"
 
@@ -118,7 +118,7 @@ aws_connect list-views \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".ViewsSummaryList[]$jq_prefix_filter" |
-    jq -s "sort_by(.Name) | .[]" |
+    jq -s "sort_by(.Name) | .[]" \
     > "$instance_alias_dir/views.json"
     echo -e "\n$(jq -s "length") views listed in \"$instance_alias_dir/views.json\"$jq_prefix_filter_text"
 
@@ -150,7 +150,7 @@ aws_connect list-default-vocabularies \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".DefaultVocabularyList[]" |
-    jq -s "sort_by(.VocabularyName) | .[]" |
+    jq -s "sort_by(.VocabularyName) | .[]" \
     > "$instance_alias_dir/vocabularies.json"
     echo -e "\n$(jq -s "length") vocabularies listed in \"$instance_alias_dir/vocabularies.json\""
 
@@ -182,7 +182,7 @@ aws_connect list-data-tables \
 if [ -s $TEMPFILE ]; then
     cat $TEMPFILE |
     jq -r ".DataTableSummaryList[]" |
-    jq -s "sort_by(.TableName) | .[]" |
+    jq -s "sort_by(.TableName) | .[]" \
     > "$instance_alias_dir/datatables.json"
     echo -e "\n$(jq -s "length") data tables listed in \"$instance_alias_dir/datatables.json\""
 

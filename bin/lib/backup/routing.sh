@@ -20,7 +20,7 @@ aws_connect list-prompts \
     > $TEMPFILE || error $LINENO
 
 cat $TEMPFILE |
-jq -r ".PromptSummaryList |= sort_by(.Name) | .[][]" |
+jq -r ".PromptSummaryList |= sort_by(.Name) | .[][]" \
 > "$instance_alias_dir/prompts.json"
 echo -e "\n$(jq -s "length") prompts listed in \"$instance_alias_dir/prompts.json\""
 
@@ -50,7 +50,7 @@ aws_connect list-hours-of-operations \
 
 cat $TEMPFILE |
 jq -r ".HoursOfOperationSummaryList[]$jq_prefix_filter" |
-jq -s "sort_by(.Name) | .[]" |
+jq -s "sort_by(.Name) | .[]" \
 > "$instance_alias_dir/hours.json"
 echo -e "\n$(jq -s "length") hours of operations listed in \"$instance_alias_dir/hours.json\"$jq_prefix_filter_text"
 
@@ -86,7 +86,7 @@ aws_connect list-queues \
 
 cat $TEMPFILE |
 jq -r ".QueueSummaryList[] | select(.QueueType != \"AGENT\")$jq_prefix_filter" |
-jq -s "sort_by(.Name) | .[]" |
+jq -s "sort_by(.Name) | .[]" \
 > "$instance_alias_dir/queues.json"
 echo -e "\n$(jq -s "length") queues listed in \"$instance_alias_dir/queues.json\"$jq_prefix_filter_text"
 
@@ -132,7 +132,7 @@ aws_connect list-routing-profiles \
 
 cat $TEMPFILE |
 jq -r ".RoutingProfileSummaryList[]$jq_prefix_filter" |
-jq -s "sort_by(.Name) | .[]" |
+jq -s "sort_by(.Name) | .[]" \
 > "$instance_alias_dir/routings.json"
 echo -e "\n$(jq -s "length") routing profiles listed in \"$instance_alias_dir/routings.json\"$jq_prefix_filter_text"
 
