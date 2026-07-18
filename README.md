@@ -257,6 +257,23 @@ for Disaster Recovery use cases. The following work remains:
 
 ### Backlog (enhancements)
 
+- **CRITICAL: User identity gap in cross-account DR.** The `create-user` API requires
+  either a password (never available from backup) or a `DirectoryUserId` (instance-specific,
+  won't exist in DR account). This means **user creation always fails silently in
+  cross-account restore**. The operator won't discover this until they test their DR plan.
+  Recommendations:
+  1. Document as a hard prerequisite: users must be pre-provisioned on DR instance
+     (via Identity Center sync, SCIM, or manual creation) BEFORE running restore.
+  2. The restore's user section should `update-user-*` for users that already exist
+     (by username match), applying routing profile, security profile, hierarchy, and
+     phone config from the backup — rather than only attempting `create-user`.
+  3. The preflight check (`-m preflight`) should verify that all backed-up usernames
+     exist on the target instance and warn loudly if they don't.
+  4. The validate should distinguish "user exists with wrong config" (restore can fix)
+     from "user doesn't exist at all" (identity prerequisite not met — operator action).
+  5. Consider adding a `--user-password-file` flag to restore that supplies temporary
+     passwords for user creation (reset on first login) as an escape hatch for
+     Connect-managed (non-SSO) instances.
 - **Consistent layered output across all scripts.** Currently only `connect_validate`
   uses the `━━━ Layer N: Name ━━━` style. The backup, plan, and restore scripts use
   inconsistent heading styles (`━━━ Name ━━━`, `Checking X ...`, section headers with
