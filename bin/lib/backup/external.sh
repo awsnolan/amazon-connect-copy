@@ -13,9 +13,14 @@ echo ""
 echo "━━━ External Systems & Flows ━━━ $(ts)"
 
 ############################################################
-# Amazon Connect Cases (separate CLI namespace)
+# Amazon Connect Cases (skip if feature not enabled)
 ############################################################
 
+cases_feature=$(jq -r '.cases // "true"' "$instance_alias_dir/features_enabled.json" 2>/dev/null)
+if [ "$cases_feature" = "false" ]; then
+    echo "  Cases: not enabled (skipping)"
+    echo "[]" > "$instance_alias_dir/cases_domains.json"
+else
 aws connectcases list-domains \
     --max-results 100 \
     $profile_flag \
@@ -50,11 +55,17 @@ else
     echo "No Connect Cases domains found"
     echo "[]" > "$instance_alias_dir/cases_domains.json"
 fi
+fi
 
 ############################################################
-# Outbound Campaigns V2 (separate CLI namespace)
+# Outbound Campaigns V2 (skip if feature not enabled)
 ############################################################
 
+campaigns_feature=$(jq -r '.campaigns // "true"' "$instance_alias_dir/features_enabled.json" 2>/dev/null)
+if [ "$campaigns_feature" = "false" ]; then
+    echo "  Campaigns: not enabled (skipping)"
+    echo "[]" > "$instance_alias_dir/campaigns.json"
+else
 aws connect-campaigns-v2 list-campaigns \
     --max-results 100 \
     $profile_flag \
@@ -77,6 +88,7 @@ if [ -s $TEMPFILE ]; then
 else
     echo "No outbound campaigns found"
     echo "[]" > "$instance_alias_dir/campaigns.json"
+fi
 fi
 
 ############################################################

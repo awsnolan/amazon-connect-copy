@@ -131,3 +131,42 @@ else
     echo " none"
     echo "[]" > "$instance_alias_dir/lambda_associations.json"
 fi
+
+############################################################
+# Feature Detection
+# Probe optional services to determine what's enabled on this instance.
+# Write features_enabled.json so downstream sections can skip gracefully.
+############################################################
+
+echo -n "  Feature detection..."
+features_file="$instance_alias_dir/features_enabled.json"
+{
+    echo "{"
+
+    # Cases: try list-domains
+    cases_enabled="false"
+    cases_check=$(aws connectcases list-domains --max-results 1 $profile_flag --output json 2>/dev/null)
+    if [ -n "$cases_check" ] && echo "$cases_check" | jq -e '.domains' >/dev/null 2>&1; then
+        cases_enabled="true"
+    fi
+    echo "  \"cases\": $cases_enabled,"
+
+    # Campaigns: try list-campaigns
+    campaigns_enabled="false"
+    campaigns_check=$(aws connect-campaigns-v2 list-campaigns --max-results 1 $profile_flag --output json 2>/dev/null)
+    if [ -n "$campaigns_check" ] && echo "$campaigns_check" | jq -e '.campaignSummaryList' >/dev/null 2>&1; then
+        campaigns_enabled="true"
+    fi
+    echo "  \"campaigns\": $campaigns_enabled,"
+
+    # Email: try search-email-addresses
+    email_enabled="false"
+    email_check=$(aws_connect search-email-addresses --instance-id $instance_id --max-results 1 2>/dev/null)
+    if [ -n "$email_check" ] && echo "$email_check" | jq -e '.EmailAddresses' >/dev/null 2>&1; then
+        email_enabled="true"
+    fi
+    echo "  \"email\": $email_enabled"
+
+    echo "}"
+} > "$features_file"
+echo " done (cases=$cases_enabled, campaigns=$campaigns_enabled, email=$email_enabled)"

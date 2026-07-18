@@ -11,31 +11,37 @@ echo ""
 echo "━━━ Channels & Phone Numbers ━━━ $(ts)"
 
 ############################################################
-# Email Addresses
+# Email Addresses (skip if feature not enabled)
 ############################################################
 
-aws_connect search-email-addresses \
-    --instance-id $instance_id \
-    --max-results 100 \
-    > $TEMPFILE 2>/dev/null || true
-
-if [ -s $TEMPFILE ]; then
-        jq -r '.EmailAddresses // [] | sort_by(.EmailAddress) | .[]' "$TEMPFILE" \
-    > "$instance_alias_dir/email_addresses.json"
-    echo -e "\n$(jq -s "length" "$instance_alias_dir/email_addresses.json") email addresses listed in \"$instance_alias_dir/email_addresses.json\""
-
-    while read ea_id ea_address; do
-        echo "Exporting email address $ea_address"
-        ea_encoded=$(path_encode "$ea_address")
-        aws_connect describe-email-address \
-            --instance-id $instance_id \
-            --email-address-id $ea_id \
-            > "$instance_alias_dir/emailaddress_$ea_encoded.json" 2>/dev/null || true
-    done < <(    jq -r ".EmailAddressId + \" \" + .EmailAddress" "$instance_alias_dir/email_addresses.json" | tr -d '\r')
-    test $? -eq 0 || error
-else
-    echo "No email addresses found"
+email_feature=$(jq -r '.email // "true"' "$instance_alias_dir/features_enabled.json" 2>/dev/null)
+if [ "$email_feature" = "false" ]; then
+    echo "  Email: not enabled (skipping)"
     echo "[]" > "$instance_alias_dir/email_addresses.json"
+else
+    aws_connect search-email-addresses \
+        --instance-id $instance_id \
+        --max-results 100 \
+        > $TEMPFILE 2>/dev/null || true
+
+    if [ -s $TEMPFILE ]; then
+        jq -r '.EmailAddresses // [] | sort_by(.EmailAddress) | .[]' "$TEMPFILE" \
+        > "$instance_alias_dir/email_addresses.json"
+        echo "$(jq -s 'length' "$instance_alias_dir/email_addresses.json" 2>/dev/null || echo 0) email addresses"
+
+        while IFS=$'\t' read -r ea_id ea_address; do
+            [ -z "$ea_id" ] && continue
+            echo "  Exporting email address $ea_address"
+            ea_encoded=$(path_encode "$ea_address")
+            aws_connect describe-email-address \
+                --instance-id $instance_id \
+                --email-address-id $ea_id \
+                > "$instance_alias_dir/emailaddress_$ea_encoded.json" 2>/dev/null || true
+        done < <(jq -r '.EmailAddressId + "\t" + .EmailAddress' "$instance_alias_dir/email_addresses.json" | tr -d '\r')
+    else
+        echo "  No email addresses found"
+        echo "[]" > "$instance_alias_dir/email_addresses.json"
+    fi
 fi
 
 ############################################################
@@ -54,13 +60,13 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             > "$instance_alias_dir/attachment_config.json" 2>/dev/null || true
         if [ -s "$instance_alias_dir/attachment_config.json" ]; then
-            echo "Attachment configuration saved"
+            echo "  Attachment configuration saved"
         else
-            echo "Attachments enabled but configuration API not available"
+            echo "  Attachments enabled but configuration API not available"
             echo "{}" > "$instance_alias_dir/attachment_config.json"
         fi
     else
-        echo "Attachments not enabled"
+        echo "  Attachments not enabled"
         echo "{}" > "$instance_alias_dir/attachment_config.json"
     fi
 else
@@ -77,19 +83,19 @@ aws_connect list-phone-numbers-v2 \
     > $TEMPFILE 2>/dev/null || true
 
 if [ -s $TEMPFILE ]; then
-        jq -r '.ListPhoneNumbersSummaryList // [] | sort_by(.PhoneNumber) | .[]' "$TEMPFILE" \
+    jq -r '.ListPhoneNumbersSummaryList // [] | sort_by(.PhoneNumber) | .[]' "$TEMPFILE" \
     > "$instance_alias_dir/phonenumbers.json"
-    echo -e "\n$(jq -s "length" "$instance_alias_dir/phonenumbers.json") phone numbers listed in \"$instance_alias_dir/phonenumbers.json\""
+    echo "$(jq -s 'length' "$instance_alias_dir/phonenumbers.json" 2>/dev/null || echo 0) phone numbers"
 
-    while read pn_id pn_number; do
-        echo "Exporting phone number $pn_number"
+    while IFS=$'\t' read -r pn_id pn_number; do
+        [ -z "$pn_id" ] && continue
+        echo "  Exporting phone number $pn_number"
         pn_encoded=$(path_encode "$pn_number")
         aws_connect describe-phone-number \
             --phone-number-id $pn_id \
             > "$instance_alias_dir/phonenumber_$pn_encoded.json" || error $LINENO
-    done < <(    jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir/phonenumbers.json" | tr -d '\r')
-    test $? -eq 0 || error
+    done < <(jq -r '.PhoneNumberId + "\t" + .PhoneNumber' "$instance_alias_dir/phonenumbers.json" | tr -d '\r')
 else
-    echo "No phone numbers found"
+    echo "  No phone numbers found"
     echo "[]" > "$instance_alias_dir/phonenumbers.json"
 fi
