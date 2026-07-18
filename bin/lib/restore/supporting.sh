@@ -3,11 +3,7 @@
 # Task Templates
 #
 
-cat <<EOD
-
-Task Templates
---------------
-EOD
+section_header "Supporting Resources"
 egrep "^tasktemplate_" "$helper_old" > $TEMPOLD
 egrep "^tasktemplate_" "$helper_new" > $TEMPNEW
 if [ ! -s $TEMPNEW ]; then

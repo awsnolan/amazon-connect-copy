@@ -8,11 +8,7 @@
 # such that references can be resolved in updates
 #
 
-cat <<EOD
-
-Contact Flow Modules Creation
------------------------------
-EOD
+section_header "Contact Flows & Modules"
 
 # Preload as $helper_old may change
 # Use TEMPMOD instead of TEMPOLD to carry over to module update

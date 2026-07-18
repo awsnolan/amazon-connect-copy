@@ -10,7 +10,7 @@
 ############################################################
 
 echo ""
-echo "━━━ External Systems & Flows ━━━ $(ts)"
+section_header "External Systems & Flows"
 
 ############################################################
 # Amazon Connect Cases (skip if feature not enabled)

@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-echo "━━━ Routing Infrastructure ━━━ $(ts)"
+section_header "Routing Infrastructure"
 
 ############################################################
 # Prompts

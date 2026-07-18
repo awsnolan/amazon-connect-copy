@@ -31,36 +31,12 @@ Usage: $(basename $0) [-?fev] [-l lambda_prefix_a=lambda_prefix_b] [-b lex_bot_p
     Note: This script create files in the helper directory without changing any instance component files.
 EOD
 )
-usage() { echo -e "$USAGE" >&2; exit 2; }
-version() { echo -e "$SCRIPT_VERSION"; exit; }
-dos2unix() { tr -d '\r'; }
+
+# Source shared library (colours, ts(), usage(), version(), dos2unix(), hex/path utils)
+LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
+. "$LIB_DIR/common.sh"
 
 error() { echo -e "Error: $1" >&2; exit 1; }
-
-hex_cmd=
-if [ -x "$(command -v xxd)" ]; then
-  hex_cmd="xxd -u -p -c1"
-elif [ -x "$(command -v hexdump)" ]; then
-  hex_cmd="hexdump -v -e '/1 \"%02X\n\"'"
-elif [ -x "$(command -v od)" ]; then
-  hex_cmd="od -An -vtx1 | tr [:lower:] [:upper:] | for i in \$(cat); do echo \$i; done"
-fi
-test -z "$hex_cmd" && error "Cannot find any hex conversion commands. Please install one of these: xxd, hexdump, od"
-hex_code() { printf '%s' "$1" | eval "$hex_cmd" | while read x; do printf "%%%s" "$x"; done }
-
-path_encode()  {
-    old_lc_collate=$LC_COLLATE
-    LC_COLLATE=C
-    local length="${#1}"
-    for (( i = 0; i < length; i++ )); do
-        local c="${1:$i:1}"
-        case $c in
-            [a-zA-Z0-9.~_-]) printf '%s' "$c";;
-            *) x=$(hex_code "$c"); echo -n ${x//%0D/};;
-        esac
-    done
-    LC_COLLATE=$old_lc_collate
-}
 
 add_file() {
     alias_dir="$1"

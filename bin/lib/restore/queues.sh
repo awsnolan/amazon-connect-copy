@@ -3,11 +3,7 @@
 # Queues
 #
 
-cat <<EOD
-
-Queues
-------
-EOD
+section_header "Queues"
 # Preload as $helper_old may change
 egrep "^queue_" "$helper_old" > $TEMPOLD
 # Create what is in $helper_new

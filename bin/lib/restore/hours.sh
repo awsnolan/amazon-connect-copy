@@ -3,11 +3,7 @@
 # Queue → Quick Connect Associations
 #
 
-cat <<EOD
-
-Queue Quick Connect Associations
----------------------------------
-EOD
+section_header "Hours & Queue Associations"
 if [ -s "$instance_alias_dir_a/queues.json" ]; then
     jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/queues.json" |
     dos2unix |

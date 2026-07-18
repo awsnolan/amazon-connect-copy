@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-echo "━━━ Channels & Phone Numbers ━━━ $(ts)"
+section_header "Channels & Phone Numbers"
 
 ############################################################
 # Email Addresses (skip if feature not enabled)

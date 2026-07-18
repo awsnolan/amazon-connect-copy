@@ -3,11 +3,7 @@
 # Pre-flight: Target Instance Reachability
 #
 
-cat <<EOD
-
-Pre-flight Check: Target Instance
-----------------------------------
-EOD
+section_header "Pre-flight: Target Instance"
 
 instance_id_b=$(jq -r '.Id // empty' "$instance_alias_dir_b/instance.json" 2>/dev/null | tr -d '\r')
 if [ -z "$instance_id_b" ]; then

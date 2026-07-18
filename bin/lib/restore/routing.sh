@@ -30,11 +30,7 @@ gen_helper_routing_new() {
     echo "$out_file"
 }
 
-cat <<EOD
-
-Routing Profiles
-----------------
-EOD
+section_header "Routing Profiles"
 # Preload as $helper_old may change
 egrep "^routing_" "$helper_old" > $TEMPOLD
 # Create what is in $helper_new

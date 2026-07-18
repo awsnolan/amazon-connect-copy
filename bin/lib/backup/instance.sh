@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-echo "━━━ Instance Foundation ━━━ $(ts)"
+section_header "Instance Foundation"
 
 ############################################################
 # Instance Attributes (feature flags)

@@ -3,11 +3,7 @@
 # Quick Connects
 #
 
-cat <<EOD
-
-Quick Connects
---------------
-EOD
+section_header "Quick Connects & Features"
 # Preload as $helper_old may change
 egrep "^quickconnect_" "$helper_old" > $TEMPOLD
 # Create what is in $helper_new

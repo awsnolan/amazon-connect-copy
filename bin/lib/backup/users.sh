@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-echo "━━━ Users & Hierarchy ━━━ $(ts)"
+section_header "Users & Hierarchy"
 
 ############################################################
 # User Hierarchy Groups

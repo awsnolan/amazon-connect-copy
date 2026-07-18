@@ -3,11 +3,7 @@
 # Phone Number → Contact Flow Associations
 #
 
-cat <<EOD
-
-Phone Number Flow Associations
--------------------------------
-EOD
+section_header "Channels & Phone Numbers"
 if [ -s "$instance_alias_dir_a/phonenumbers.json" ]; then
     jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir_a/phonenumbers.json" |
     dos2unix |

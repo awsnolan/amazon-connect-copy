@@ -3,11 +3,7 @@
 # Instance Attributes (feature flags)
 #
 
-cat <<EOD
-
-Instance Attributes
--------------------
-EOD
+section_header "Instance Foundation"
 if [ -f "$instance_alias_dir_a/instance_attributes.json" ]; then
     echo "Applying instance attributes from source to target"
     # Each line in the file is a separate JSON object with Attribute.AttributeType and Attribute.Value

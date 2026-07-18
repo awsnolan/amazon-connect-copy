@@ -30,6 +30,33 @@ version() { echo -e "$SCRIPT_VERSION"; exit; }
 ts() { date '+%H:%M:%S'; }
 
 ###############################################################################
+# ANSI Colour Support
+# Respects NO_COLOR env var (https://no-color.org/) and --no-color flag.
+# Set USE_COLOR=off to disable programmatically.
+###############################################################################
+
+USE_COLOR=on
+[ -n "${NO_COLOR:-}" ] && USE_COLOR=off
+# Terminal check: disable if stdout is not a terminal
+[ ! -t 1 ] && USE_COLOR=off
+
+if [ "$USE_COLOR" = "on" ]; then
+    C_PASS='\033[32m'    # green
+    C_FAIL='\033[31m'    # red
+    C_WARN='\033[33m'    # yellow
+    C_SKIP='\033[90m'    # grey
+    C_BOLD='\033[1m'     # bold
+    C_RESET='\033[0m'    # reset
+else
+    C_PASS=''
+    C_FAIL=''
+    C_WARN=''
+    C_SKIP=''
+    C_BOLD=''
+    C_RESET=''
+fi
+
+###############################################################################
 # Hex conversion + path encoding
 ###############################################################################
 
@@ -265,4 +292,13 @@ run_section() {
     fi
 
     . "$script"
+}
+
+###############################################################################
+# Section header for backup/restore output
+###############################################################################
+
+section_header() {
+    echo ""
+    echo -e "${C_BOLD}━━━ $1 ━━━ $(ts)${C_RESET}"
 }

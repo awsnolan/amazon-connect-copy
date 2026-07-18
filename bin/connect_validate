@@ -11,7 +11,7 @@ VERSION=2.0.0
 SCRIPT_VERSION="$(basename $0) $VERSION"
 
 USAGE=$(cat <<EOD
-Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only layers] [--skip layers] [--target instance-id] [--target-profile profile] instance_alias
+Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only layers] [--skip layers] [--target instance-id] [--target-profile profile] [--no-color] instance_alias
     Validate a saved Amazon Connect instance directory against the live instance.
 
     instance_alias  Alias of the Connect instance (or path to the directory saved by connect_backup)
@@ -33,13 +33,15 @@ Usage: $(basename $0) [-?v] [-p aws_profile] [-m mode] [-j] [-r retries] [--only
     --target-profile profile
                     AWS Profile for the target instance (if in a different account).
                     If omitted, uses -p profile for both.
+    --no-color      Disable ANSI colour output (also respects NO_COLOR env var)
     -v              Show version of this script
     -?              Help
 EOD
 )
-usage() { echo -e "$USAGE" >&2; exit 2; }
-version() { echo -e "$SCRIPT_VERSION"; exit; }
-dos2unix() { tr -d '\r'; }
+
+# Source shared library (colours, ts(), usage(), version(), dos2unix(), path_encode())
+LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
+. "$LIB_DIR/common.sh"
 
 ############################################################
 # Test framework
@@ -77,7 +79,7 @@ layer_start() {
     JSON_CURRENT_TESTS=""
     if [ -z "$JSON_OUTPUT" ]; then
         echo ""
-        echo "━━━ Layer $1: $2 ━━━"
+        echo -e "${C_BOLD}━━━ Layer $1: $2 ━━━ $(ts)${C_RESET}"
     fi
 }
 
@@ -115,7 +117,7 @@ pass() {
     PASS=$((PASS + 1))
     LAYER_PASS=$((LAYER_PASS + 1))
     _record_test "$id" "PASS" "$label"
-    [ -z "$JSON_OUTPUT" ] && echo "  [$id] PASS  $label"
+    [ -z "$JSON_OUTPUT" ] && echo -e "  ${C_PASS}[$id] ✓ $label${C_RESET}"
 }
 
 fail() {
@@ -124,8 +126,8 @@ fail() {
     LAYER_FAIL=$((LAYER_FAIL + 1))
     _record_test "$id" "FAIL" "$label" "$detail"
     if [ -z "$JSON_OUTPUT" ]; then
-        echo "  [$id] FAIL  $label" >&2
-        [ -n "$detail" ] && echo "         → $detail" >&2
+        echo -e "  ${C_FAIL}[$id] ✗ $label${C_RESET}" >&2
+        [ -n "$detail" ] && echo -e "  ${C_FAIL}       → $detail${C_RESET}" >&2
     fi
     # Accumulate failures for JSON summary
     local fail_json="{\"id\":\"$id\",\"layer\":\"$CURRENT_LAYER\",\"label\":\"$label\""
@@ -141,8 +143,8 @@ warn() {
     LAYER_WARN=$((LAYER_WARN + 1))
     _record_test "$id" "WARN" "$label" "$detail"
     if [ -z "$JSON_OUTPUT" ]; then
-        echo "  [$id] WARN  $label"
-        [ -n "$detail" ] && echo "         → $detail"
+        echo -e "  ${C_WARN}[$id] ⚠ $label${C_RESET}"
+        [ -n "$detail" ] && echo -e "  ${C_WARN}       → $detail${C_RESET}"
     fi
 }
 
@@ -151,7 +153,7 @@ skip() {
     SKIP=$((SKIP + 1))
     LAYER_SKIP=$((LAYER_SKIP + 1))
     _record_test "$id" "SKIP" "$label" "$detail"
-    [ -z "$JSON_OUTPUT" ] && echo "  [$id] SKIP  $label${detail:+ ($detail)}"
+    [ -z "$JSON_OUTPUT" ] && echo -e "  ${C_SKIP}[$id] - $label${detail:+ ($detail)}${C_RESET}"
 }
 
 ############################################################
@@ -304,6 +306,7 @@ while [ $# -gt 0 ]; do
     --skip)           VALIDATE_SKIP="${2//,/ }"; shift 2;;
     --target)         TARGET_INSTANCE_ID="$2"; shift 2;;
     --target-profile) TARGET_PROFILE="$2"; shift 2;;
+    --no-color)       USE_COLOR=off; C_PASS=''; C_FAIL=''; C_WARN=''; C_SKIP=''; C_BOLD=''; C_RESET=''; shift;;
     *)                args+=("$1"); shift;;
     esac
 done
@@ -393,16 +396,14 @@ else
 fi
 
 if [ -z "$JSON_OUTPUT" ]; then
-    cat <<EOD
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  connect_validate $VERSION
-  Source   : $instance_alias
-  Directory: $instance_alias_dir
-  Target   : $target_label
-  Mode     : $mode
-  Profile  : ${TARGET_PROFILE:-${profile:-${AWS_PROFILE:-(default)}}}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-EOD
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}  connect_validate $VERSION${C_RESET}"
+    echo "  Source   : $instance_alias"
+    echo "  Directory: $instance_alias_dir"
+    echo "  Target   : $target_label"
+    echo "  Mode     : $mode"
+    echo "  Profile  : ${TARGET_PROFILE:-${profile:-${AWS_PROFILE:-(default)}}}"
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
 fi
 
 ############################################################
@@ -2990,30 +2991,30 @@ EOJSON
 else
     # Human-readable summary
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  Results"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "  ✓ Passed  : $PASS"
-    echo "  ✗ Failed  : $FAIL"
-    echo "  ⚠ Warnings: $WARN"
-    echo "  - Skipped : $SKIP"
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "${C_BOLD}  Results${C_RESET}"
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "  ${C_PASS}✓ Passed  : $PASS${C_RESET}"
+    echo -e "  ${C_FAIL}✗ Failed  : $FAIL${C_RESET}"
+    echo -e "  ${C_WARN}⚠ Warnings: $WARN${C_RESET}"
+    echo -e "  ${C_SKIP}- Skipped : $SKIP${C_RESET}"
     echo "  Duration  : ${DURATION}s"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
 
     if [ "$FAIL" -gt 0 ]; then
         echo ""
-        echo "  RESULT: FAIL ($FAIL test(s) failed)"
-        echo "  Review errors above. Instance is NOT ready for live traffic."
+        echo -e "  ${C_FAIL}${C_BOLD}RESULT: FAIL ($FAIL test(s) failed)${C_RESET}"
+        echo -e "  ${C_FAIL}Review errors above. Instance is NOT ready for live traffic.${C_RESET}"
     elif [ "$WARN" -gt 0 ]; then
         echo ""
-        echo "  RESULT: PASS with $WARN warning(s)"
-        echo "  Review warnings. Instance may be ready for live traffic."
+        echo -e "  ${C_WARN}${C_BOLD}RESULT: PASS with $WARN warning(s)${C_RESET}"
+        echo -e "  ${C_WARN}Review warnings. Instance may be ready for live traffic.${C_RESET}"
     else
         echo ""
-        echo "  RESULT: PASS"
-        echo "  Instance validated. Ready for live traffic."
+        echo -e "  ${C_PASS}${C_BOLD}RESULT: PASS${C_RESET}"
+        echo -e "  ${C_PASS}Instance validated. Ready for live traffic.${C_RESET}"
     fi
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
 fi
 
 # Exit code
