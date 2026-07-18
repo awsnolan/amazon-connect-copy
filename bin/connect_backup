@@ -84,8 +84,10 @@ while getopts "?fsevp:c:G:C:" arg; do
 done
 shift $((OPTIND-1))
 
-# Codepage filter override
-if [ -n "$codepage" ] && [ "$codepage" != "$aws_cli_encoding" ]; then
+# Codepage filter override (only for genuinely non-UTF-8 environments like Windows Git Bash ANSI)
+# On macOS, Linux, CloudShell, WSL — codepage will be UTF-8/utf8 and this won't activate
+codepage_upper=$(echo "$codepage" | tr '[:lower:]' '[:upper:]' | tr -d '-')
+if [ -n "$codepage" ] && [ "$codepage_upper" != "UTF8" ] && [ "$codepage" != "$aws_cli_encoding" ]; then
     aws_cli_out_filter() {
         cat > $TEMPOF
         iconv -f $codepage -t $aws_cli_encoding $TEMPOF 2>/dev/null
