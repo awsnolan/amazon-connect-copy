@@ -1,0 +1,270 @@
+#!/bin/bash
+
+############################################################
+#
+# connect_deps_restore — Restore external dependencies to target account.
+#
+# Deploys Lambda functions, creates Lex V2 bots, and associates them
+# with the target Connect instance. Run BEFORE connect_restore.
+#
+
+VERSION=1.0.0
+SCRIPT_VERSION="$(basename $0) $VERSION"
+
+LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
+. "$LIB_DIR/common.sh"
+
+USAGE=$(cat <<EOD
+Usage: $(basename $0) [-?dv] [-p aws_profile] [-i instance_id] deps_dir
+    Restore external dependencies to the target account/region.
+
+    deps_dir        Path to the dependency backup directory (from connect_deps_backup)
+    -d              Dry run — show what would be deployed without making changes
+    -p profile      AWS Profile for target account
+    -i instance_id  Target Connect instance ID (for Lambda permissions and associations)
+    -v              Show version
+    -?              Help
+
+    Run this BEFORE connect_restore to ensure Lambda functions and Lex bots
+    exist in the target account.
+EOD
+)
+
+export AWS_DEFAULT_OUTPUT=json
+
+dryrun=
+profile=
+instance_id=
+while getopts "?dvp:i:" arg; do
+    case "$arg" in
+    d)  dryrun=on;;
+    v)  version;;
+    p)  profile=$OPTARG;;
+    i)  instance_id=$OPTARG;;
+    *)  usage;;
+    esac
+done
+shift $((OPTIND-1))
+
+deps_dir=$1
+if [ -z "$deps_dir" ]; then
+    usage
+fi
+
+if [ ! -d "$deps_dir" ]; then
+    error "Dependencies directory not found: $deps_dir"
+fi
+
+profile_flag=${profile:+ --profile $profile}
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  connect_deps_restore $VERSION"
+echo "  Source   : $deps_dir"
+echo "  Profile  : ${profile:-${AWS_PROFILE:-(default)}}"
+echo "  Instance : ${instance_id:-(not specified)}"
+echo "  Mode     : ${dryrun:+DRY RUN}${dryrun:-LIVE}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Get target account ID for ARN construction
+target_account=$(aws sts get-caller-identity $profile_flag --output json 2>/dev/null | jq -r '.Account // empty')
+target_region=${AWS_REGION:-${AWS_DEFAULT_REGION:-ap-southeast-2}}
+if [ -z "$target_account" ]; then
+    error "Cannot determine target account ID. Check credentials."
+fi
+echo "  Account  : $target_account"
+echo "  Region   : $target_region"
+
+############################################################
+# Lambda Functions
+############################################################
+
+echo ""
+echo "━━━ Lambda Functions ━━━ $(ts)"
+
+lambda_dir="$deps_dir/lambda"
+if [ -d "$lambda_dir" ] && [ "$(ls -d "$lambda_dir"/*/ 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then
+    for func_dir in "$lambda_dir"/*/; do
+        [ -d "$func_dir" ] || continue
+        func_name=$(basename "$func_dir")
+        echo "  Deploying: $func_name"
+
+        config_file="$func_dir/config.json"
+        code_file="$func_dir/code.zip"
+        policy_file="$func_dir/policy.json"
+
+        if [ ! -f "$config_file" ]; then
+            echo "    ✗ No config.json — skipping"
+            continue
+        fi
+
+        # Extract config values
+        runtime=$(jq -r '.Runtime // "python3.12"' "$config_file")
+        handler=$(jq -r '.Handler // "app.handler"' "$config_file")
+        timeout=$(jq -r '.Timeout // 8' "$config_file")
+        memory=$(jq -r '.MemorySize // 128' "$config_file")
+        description=$(jq -r '.Description // ""' "$config_file")
+        role_name=$(jq -r '.Role // empty' "$config_file" | sed 's|.*/||')
+
+        if [ -n "$dryrun" ]; then
+            echo "    DRY RUN: would create/update $func_name ($runtime, ${timeout}s timeout)"
+            continue
+        fi
+
+        # Check if function already exists
+        existing=$(aws lambda get-function \
+            $profile_flag --output json \
+            --function-name "$func_name" 2>/dev/null)
+
+        if [ -n "$existing" ]; then
+            # Update code
+            if [ -f "$code_file" ]; then
+                aws lambda update-function-code \
+                    $profile_flag --output json \
+                    --function-name "$func_name" \
+                    --zip-file "fileb://$code_file" > /dev/null 2>&1
+                echo "    ✓ Code updated"
+            fi
+            # Update configuration
+            aws lambda update-function-configuration \
+                $profile_flag --output json \
+                --function-name "$func_name" \
+                --runtime "$runtime" \
+                --handler "$handler" \
+                --timeout "$timeout" \
+                --memory-size "$memory" \
+                --description "$description" > /dev/null 2>&1
+            echo "    ✓ Configuration updated"
+        else
+            # Create function (requires a role — use existing or create)
+            if [ ! -f "$code_file" ]; then
+                echo "    ✗ No code.zip — cannot create function"
+                continue
+            fi
+            # Try to find a suitable execution role
+            local_role="arn:aws:iam::${target_account}:role/${role_name}"
+            aws lambda create-function \
+                $profile_flag --output json \
+                --function-name "$func_name" \
+                --runtime "$runtime" \
+                --handler "$handler" \
+                --timeout "$timeout" \
+                --memory-size "$memory" \
+                --description "$description" \
+                --role "$local_role" \
+                --zip-file "fileb://$code_file" > /dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                echo "    ✓ Function created"
+            else
+                echo "    ✗ Create failed (check IAM role: $local_role)"
+                continue
+            fi
+        fi
+
+        # Add Connect invoke permission if instance_id provided
+        if [ -n "$instance_id" ]; then
+            instance_arn="arn:aws:connect:$target_region:$target_account:instance/$instance_id"
+            aws lambda add-permission \
+                $profile_flag --output json \
+                --function-name "$func_name" \
+                --statement-id "connect-$instance_id" \
+                --action lambda:InvokeFunction \
+                --principal connect.amazonaws.com \
+                --source-arn "$instance_arn" > /dev/null 2>&1 || true
+            echo "    ✓ Connect permission granted"
+
+            # Associate with Connect instance
+            func_arn="arn:aws:lambda:$target_region:$target_account:function:$func_name"
+            aws connect associate-lambda-function \
+                $profile_flag --output json \
+                --instance-id "$instance_id" \
+                --function-arn "$func_arn" > /dev/null 2>&1 || true
+            echo "    ✓ Associated with Connect instance"
+        fi
+    done
+else
+    echo "  No Lambda functions to restore"
+fi
+
+############################################################
+# Lex V2 Bots
+############################################################
+
+echo ""
+echo "━━━ Lex V2 Bots ━━━ $(ts)"
+
+lex_dir="$deps_dir/lex_v2"
+if [ -d "$lex_dir" ] && [ "$(ls -d "$lex_dir"/*/ 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then
+    for bot_dir in "$lex_dir"/*/; do
+        [ -d "$bot_dir" ] || continue
+        bot_name=$(basename "$bot_dir")
+        echo "  Deploying: $bot_name"
+
+        bot_file="$bot_dir/bot.json"
+        if [ ! -f "$bot_file" ]; then
+            echo "    ✗ No bot.json — skipping"
+            continue
+        fi
+
+        if [ -n "$dryrun" ]; then
+            echo "    DRY RUN: would create/update bot $bot_name"
+            continue
+        fi
+
+        # Check if bot already exists by name
+        existing_bot_id=$(aws lexv2-models list-bots \
+            $profile_flag --output json 2>/dev/null | \
+            jq -r ".botSummaries[] | select(.botName == \"$bot_name\") | .botId" 2>/dev/null | head -1)
+
+        if [ -n "$existing_bot_id" ]; then
+            echo "    ✓ Bot already exists (id=$existing_bot_id)"
+        else
+            echo "    NOTE: Lex V2 bot creation via CLI is complex (requires role, locales, intents)."
+            echo "    Saved definition: $bot_file"
+            echo "    Recommend: import via Lex console or use CloudFormation/SAM template."
+        fi
+
+        # Associate with Connect if instance_id provided and bot exists
+        if [ -n "$instance_id" ] && [ -n "$existing_bot_id" ]; then
+            # Find alias
+            alias_file="$bot_dir/alias.json"
+            if [ -f "$alias_file" ]; then
+                alias_id=$(jq -r '.botAliasId // empty' "$alias_file")
+                if [ -n "$alias_id" ]; then
+                    # Get the actual alias ID on this account's bot
+                    local_alias_name=$(jq -r '.botAliasName // "live"' "$alias_file")
+                    local_alias_id=$(aws lexv2-models list-bot-aliases \
+                        $profile_flag --output json \
+                        --bot-id "$existing_bot_id" 2>/dev/null | \
+                        jq -r ".botAliasSummaries[] | select(.botAliasName == \"$local_alias_name\") | .botAliasId" 2>/dev/null | head -1)
+                    if [ -n "$local_alias_id" ]; then
+                        local_alias_arn="arn:aws:lex:$target_region:$target_account:bot-alias/$existing_bot_id/$local_alias_id"
+                        aws connect associate-bot \
+                            $profile_flag --output json \
+                            --instance-id "$instance_id" \
+                            --lex-v2-bot "AliasArn=$local_alias_arn" > /dev/null 2>&1 || true
+                        echo "    ✓ Associated with Connect instance"
+                    fi
+                fi
+            fi
+        fi
+    done
+else
+    echo "  No Lex V2 bots to restore"
+fi
+
+############################################################
+# Summary
+############################################################
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ -n "$dryrun" ]; then
+    echo "  DRY RUN complete — no changes made."
+else
+    echo "  Dependencies restore complete."
+    echo ""
+    echo "  Next steps:"
+    echo "    1. Verify: connect_validate -m preflight --target <instance-id> <backup-dir>"
+    echo "    2. Proceed: connect_backup / connect_plan / connect_restore"
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

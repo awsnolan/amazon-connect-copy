@@ -1,0 +1,322 @@
+#!/bin/bash
+
+############################################################
+#
+# connect_deps_backup — Back up external dependencies referenced by
+#                       a saved Amazon Connect instance.
+#
+# Downloads Lambda code, Lex V2 bot definitions, and prompt metadata
+# so they can be restored to a DR account.
+#
+
+VERSION=1.0.0
+SCRIPT_VERSION="$(basename $0) $VERSION"
+
+LIB_DIR="$(cd "$(dirname "$0")/lib" && pwd)"
+. "$LIB_DIR/common.sh"
+
+USAGE=$(cat <<EOD
+Usage: $(basename $0) [-?fv] [-p aws_profile] [-d deps_dir] instance_alias
+    Back up all external dependencies referenced by a saved Amazon Connect instance.
+
+    instance_alias  Path to the directory saved by connect_backup
+    -d deps_dir     Output directory for dependency backups (default: <instance_alias>_deps)
+    -f              Force removal of existing deps directory
+    -p profile      AWS Profile to use
+    -v              Show version
+    -?              Help
+
+    Prerequisites: connect_backup must have been run first (needs external_dependencies.json
+    and prompts.json).
+EOD
+)
+
+export AWS_DEFAULT_OUTPUT=json
+
+forced=
+profile=
+deps_dir=
+while getopts "?fvp:d:" arg; do
+    case "$arg" in
+    f)  forced=on;;
+    v)  version;;
+    p)  profile=$OPTARG;;
+    d)  deps_dir=$OPTARG;;
+    *)  usage;;
+    esac
+done
+shift $((OPTIND-1))
+
+instance_alias_dir=$1
+if [ -z "$instance_alias_dir" ]; then
+    usage
+fi
+
+profile_flag=${profile:+ --profile $profile}
+deps_dir=${deps_dir:-${instance_alias_dir}_deps}
+
+# Verify prerequisites
+if [ ! -f "$instance_alias_dir/external_dependencies.json" ]; then
+    error "external_dependencies.json not found in $instance_alias_dir. Run connect_backup first."
+fi
+
+if [ -n "$forced" ] && [ -d "$deps_dir" ]; then
+    rm -rf "$deps_dir"
+fi
+
+if [ -d "$deps_dir" ]; then
+    error "Directory '$deps_dir' already exists. Use -f to force removal."
+fi
+
+mkdir -p "$deps_dir/lambda" "$deps_dir/lex_v2" "$deps_dir/prompts"
+
+deps_file="$instance_alias_dir/external_dependencies.json"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  connect_deps_backup $VERSION"
+echo "  Source   : $instance_alias_dir"
+echo "  Output   : $deps_dir"
+echo "  Profile  : ${profile:-${AWS_PROFILE:-(default)}}"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+############################################################
+# Lambda Functions
+############################################################
+
+echo ""
+echo "━━━ Lambda Functions ━━━ $(ts)"
+
+lambda_count=$(jq '.LambdaFunctions | length' "$deps_file" 2>/dev/null || echo 0)
+if [ "$lambda_count" -eq 0 ]; then
+    echo "  No Lambda functions referenced"
+else
+    echo "  $lambda_count Lambda function(s) to back up"
+    while IFS=$'\t' read -r arn func_name; do
+        [ -z "$arn" ] && continue
+        echo "  Backing up: $func_name"
+        local_dir="$deps_dir/lambda/$func_name"
+        mkdir -p "$local_dir"
+
+        # Get function configuration
+        config=$(aws lambda get-function-configuration \
+            $profile_flag --output json \
+            --function-name "$arn" 2>/dev/null)
+        if [ -z "$config" ]; then
+            echo "    ✗ Could not describe function (may not have access)"
+            continue
+        fi
+        echo "$config" > "$local_dir/config.json"
+
+        # Get function code (download zip from presigned URL)
+        code_url=$(aws lambda get-function \
+            $profile_flag --output json \
+            --function-name "$arn" 2>/dev/null | \
+            jq -r '.Code.Location // empty')
+        if [ -n "$code_url" ]; then
+            curl -s -o "$local_dir/code.zip" "$code_url"
+            echo "    ✓ Code downloaded ($(wc -c < "$local_dir/code.zip" | tr -d ' ') bytes)"
+        else
+            echo "    ✗ Could not get code download URL"
+        fi
+
+        # Get resource policy
+        policy=$(aws lambda get-policy \
+            $profile_flag --output json \
+            --function-name "$arn" 2>/dev/null)
+        if [ -n "$policy" ]; then
+            echo "$policy" | jq -r '.Policy' > "$local_dir/policy.json"
+        else
+            echo "{}" > "$local_dir/policy.json"
+        fi
+
+        # Get tags
+        tags=$(aws lambda list-tags \
+            $profile_flag --output json \
+            --resource "$arn" 2>/dev/null)
+        echo "${tags:-{}}" > "$local_dir/tags.json"
+
+    done < <(jq -r '.LambdaFunctions[] | .Arn + "\t" + .FunctionName' "$deps_file" | tr -d '\r')
+fi
+
+############################################################
+# Lex V2 Bots
+############################################################
+
+echo ""
+echo "━━━ Lex V2 Bots ━━━ $(ts)"
+
+lex_count=$(jq '.LexV2Bots | length' "$deps_file" 2>/dev/null || echo 0)
+if [ "$lex_count" -eq 0 ]; then
+    echo "  No Lex V2 bots referenced"
+else
+    echo "  $lex_count Lex V2 bot(s) to back up"
+    while IFS=$'\t' read -r bot_id bot_name alias_id; do
+        [ -z "$bot_id" ] && continue
+        echo "  Backing up: $bot_name (id=$bot_id)"
+        local_dir="$deps_dir/lex_v2/$bot_name"
+        mkdir -p "$local_dir"
+
+        # Describe bot
+        bot_info=$(aws lexv2-models describe-bot \
+            $profile_flag --output json \
+            --bot-id "$bot_id" 2>/dev/null)
+        if [ -z "$bot_info" ]; then
+            echo "    ✗ Could not describe bot"
+            continue
+        fi
+        echo "$bot_info" > "$local_dir/bot.json"
+
+        # Describe bot alias
+        if [ -n "$alias_id" ]; then
+            alias_info=$(aws lexv2-models describe-bot-alias \
+                $profile_flag --output json \
+                --bot-id "$bot_id" \
+                --bot-alias-id "$alias_id" 2>/dev/null)
+            [ -n "$alias_info" ] && echo "$alias_info" > "$local_dir/alias.json"
+        fi
+
+        # List and describe locales
+        locales=$(aws lexv2-models list-bot-locales \
+            $profile_flag --output json \
+            --bot-id "$bot_id" \
+            --bot-version "DRAFT" 2>/dev/null)
+        if [ -n "$locales" ]; then
+            echo "$locales" > "$local_dir/locales.json"
+            while IFS= read -r locale_id; do
+                [ -z "$locale_id" ] && continue
+                mkdir -p "$local_dir/locale_$locale_id"
+                # List intents for this locale
+                aws lexv2-models list-intents \
+                    $profile_flag --output json \
+                    --bot-id "$bot_id" \
+                    --bot-version "DRAFT" \
+                    --locale-id "$locale_id" \
+                    > "$local_dir/locale_$locale_id/intents.json" 2>/dev/null || true
+                # List slot types
+                aws lexv2-models list-slot-types \
+                    $profile_flag --output json \
+                    --bot-id "$bot_id" \
+                    --bot-version "DRAFT" \
+                    --locale-id "$locale_id" \
+                    > "$local_dir/locale_$locale_id/slot_types.json" 2>/dev/null || true
+            done < <(echo "$locales" | jq -r '.botLocaleSummaries[].localeId' 2>/dev/null | tr -d '\r')
+        fi
+        echo "    ✓ Bot definition saved"
+
+    done < <(jq -r '.LexV2Bots[] | .BotId + "\t" + .BotName + "\t" + .AliasId' "$deps_file" | tr -d '\r')
+fi
+
+############################################################
+# Prompts (metadata — audio download requires separate step)
+############################################################
+
+echo ""
+echo "━━━ Prompts ━━━ $(ts)"
+
+prompts_file="$instance_alias_dir/prompts.json"
+if [ -f "$prompts_file" ]; then
+    prompt_count=$(jq -s 'length' "$prompts_file" 2>/dev/null || echo 0)
+    echo "  $prompt_count prompt(s) — saving metadata"
+    # Copy prompt detail files to deps dir
+    for pf in "$instance_alias_dir"/prompt_*.json; do
+        [ -f "$pf" ] || continue
+        cp "$pf" "$deps_dir/prompts/"
+    done
+    echo "  ✓ Prompt metadata saved"
+    echo "  NOTE: Audio files require separate download via connect get-prompt presigned URLs"
+else
+    echo "  No prompts file found"
+fi
+
+############################################################
+# Summary
+############################################################
+
+echo ""
+echo "━━━ Runtime Dependency Inventory ━━━ $(ts)"
+echo ""
+echo "  The following resources are referenced by Lambda environment variables."
+echo "  These must exist and be accessible in the DR account for functions to"
+echo "  succeed at runtime. This tool does NOT back up or restore these — they"
+echo "  are the application team's responsibility."
+echo ""
+
+# Extract env vars from all Lambda configs and produce inventory
+inventory_file="$deps_dir/runtime_dependencies.json"
+{
+    echo "{"
+    first_func=1
+    for func_dir in "$deps_dir/lambda"/*/; do
+        [ -d "$func_dir" ] || continue
+        config_file="$func_dir/config.json"
+        [ -f "$config_file" ] || continue
+        func_name=$(basename "$func_dir")
+        env_vars=$(jq '.Environment.Variables // {}' "$config_file" 2>/dev/null)
+        [ "$env_vars" = "{}" ] && continue
+        [ "$first_func" -eq 0 ] && echo ","
+        first_func=0
+        echo "  \"$func_name\": {"
+        echo "    \"env_vars\": $env_vars,"
+        echo "    \"note\": \"Operator must ensure these resources exist in DR account\""
+        echo "  }"
+    done
+    echo ""
+    echo "}"
+} > "$inventory_file"
+
+# Display inventory
+if [ "$(jq 'keys | length' "$inventory_file" 2>/dev/null)" -gt 0 ]; then
+    jq -r 'to_entries[] | "  [\(.key)]", (.value.env_vars | to_entries[] | "    \(.key) = \(.value)")' "$inventory_file" 2>/dev/null
+else
+    echo "  (no environment variables found)"
+fi
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Dependencies backup complete"
+echo "  Output: $deps_dir"
+echo ""
+echo "  Contents:"
+lambda_backed=$(find "$deps_dir/lambda" -name "config.json" 2>/dev/null | wc -l | tr -d ' ')
+lex_backed=$(find "$deps_dir/lex_v2" -name "bot.json" 2>/dev/null | wc -l | tr -d ' ')
+prompt_backed=$(find "$deps_dir/prompts" -name "*.json" 2>/dev/null | wc -l | tr -d ' ')
+echo "    Lambda functions : $lambda_backed"
+echo "    Lex V2 bots      : $lex_backed"
+echo "    Prompt metadata  : $prompt_backed"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  ⚠ OPERATOR RESPONSIBILITIES"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "  This tool backs up the INVOCATION LAYER — whether Connect can"
+echo "  reach Lambda functions and Lex bots. It does NOT back up the"
+echo "  EXECUTION LAYER — what those functions do when they run."
+echo ""
+echo "  Before the restored instance is fully functional, you must ensure"
+echo "  the following exist in the DR account:"
+echo ""
+echo "  [IAM]"
+echo "    • Lambda execution roles (same names as source account)"
+echo "    • Service-linked roles for Connect, Lex"
+echo ""
+echo "  [Data Stores]"
+echo "    • DynamoDB tables (with data if required)"
+echo "    • S3 buckets (config files, templates)"
+echo "    • Secrets Manager secrets (API keys, credentials)"
+echo ""
+echo "  [AI/ML]"
+echo "    • Amazon Bedrock model access (if using AgentCore/Bedrock Agents)"
+echo "    • Amazon Q / Wisdom knowledge bases"
+echo ""
+echo "  [Networking]"
+echo "    • VPC, subnets, security groups (if Lambdas are VPC-attached)"
+echo "    • NAT gateways for outbound internet access"
+echo "    • VPC endpoints for AWS services"
+echo ""
+echo "  [External]"
+echo "    • CRM/ticketing system connectivity"
+echo "    • Payment gateway credentials"
+echo "    • Third-party API endpoints and auth tokens"
+echo ""
+echo "  See $inventory_file for specific environment variables"
+echo "  that your Lambda functions expect to be available."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
