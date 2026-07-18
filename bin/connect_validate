@@ -787,7 +787,27 @@ validate_layer_0() {
 
             # 0.10: Alias accessible
             local alias_info
-            alias_info=$(aws_lex_v2 describe-bot-alias --bot-id "$bot_id" --bot-alias-id "$alias_id" 2>/dev/null)
+            local check_bot_id="$bot_id"
+            # Cross-account: use the target bot ID if we resolved one
+            if [ -n "$CROSS_ACCOUNT" ]; then
+                local resolved_bot_id
+                resolved_bot_id=$(echo "$bot_info" | jq -r '.botId // empty' | tr -d '\r')
+                [ -n "$resolved_bot_id" ] && check_bot_id="$resolved_bot_id"
+            fi
+            # Try source alias ID first, then search by alias name
+            alias_info=$(aws_lex_v2 describe-bot-alias --bot-id "$check_bot_id" --bot-alias-id "$alias_id" 2>/dev/null)
+            if [ -z "$alias_info" ] && [ -n "$CROSS_ACCOUNT" ]; then
+                # Source alias ID doesn't exist — find alias by name
+                local src_alias_name
+                src_alias_name=$(jq -r ".LexV2Bots[] | select(.Arn == \"$arn\") | .AliasName // empty" "$deps_file" | tr -d '\r')
+                if [ -n "$src_alias_name" ]; then
+                    local target_alias_id
+                    target_alias_id=$(aws_lex_v2 list-bot-aliases --bot-id "$check_bot_id" 2>/dev/null | \
+                        jq -r ".botAliasSummaries[] | select(.botAliasName == \"$src_alias_name\") | .botAliasId" 2>/dev/null | head -1)
+                    [ -n "$target_alias_id" ] && \
+                        alias_info=$(aws_lex_v2 describe-bot-alias --bot-id "$check_bot_id" --bot-alias-id "$target_alias_id" 2>/dev/null)
+                fi
+            fi
             if [ -z "$alias_info" ]; then
                 lex_fail=$((lex_fail + 1))
                 [ -z "$JSON_OUTPUT" ] && echo "         → Alias missing: $bot_name alias=$alias_id" >&2
