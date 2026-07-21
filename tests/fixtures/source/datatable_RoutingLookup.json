@@ -1,0 +1,9 @@
+{
+  "TableId": "11111111-8888-9999-aaaa-bbbbbbbbbbbb",
+  "TableName": "RoutingLookup",
+  "Description": "Maps customer tier to queue",
+  "Attributes": [
+    {"AttributeId": "attr-001", "AttributeName": "CustomerTier", "AttributeType": "STRING", "IsPrimary": true},
+    {"AttributeId": "attr-002", "AttributeName": "QueueName", "AttributeType": "STRING", "IsPrimary": false}
+  ]
+}

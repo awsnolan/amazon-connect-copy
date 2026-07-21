@@ -1,0 +1,3 @@
+{"PrimaryValues":{"CustomerTier":"Gold"},"Values":{"QueueName":"SupportQueue"}}
+{"PrimaryValues":{"CustomerTier":"Silver"},"Values":{"QueueName":"GeneralQueue"}}
+{"PrimaryValues":{"CustomerTier":"Bronze"},"Values":{"QueueName":"GeneralQueue"}}

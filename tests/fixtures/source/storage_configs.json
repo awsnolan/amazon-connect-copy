@@ -1,1 +1,3 @@
-[]
+{"ResourceType":"CALL_RECORDINGS","StorageConfig":{"StorageType":"S3","S3Config":{"BucketName":"connect-recordings-111111111111","BucketPrefix":"recordings/"}}}
+{"ResourceType":"CHAT_TRANSCRIPTS","StorageConfig":{"StorageType":"S3","S3Config":{"BucketName":"connect-recordings-111111111111","BucketPrefix":"transcripts/"}}}
+{"ResourceType":"REAL_TIME_CONTACT_ANALYSIS_SEGMENTS","StorageConfig":{"StorageType":"S3","S3Config":{"BucketName":"connect-analytics-111111111111","BucketPrefix":"contact-lens/"}}}

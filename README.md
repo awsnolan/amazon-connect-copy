@@ -1,8 +1,58 @@
 # Amazon Connect DR Toolkit
 
-A set of bash scripts for backing up and restoring Amazon Connect instances.
-Designed for Disaster Recovery — back up everything, restore to a fresh instance,
-validate it works.
+Cold recovery scripts for Amazon Connect instances. Designed to get agents
+answering calls in a DR region within minutes — not to replicate every managed
+service feature.
+
+## Scope: What This Toolkit Recovers
+
+This toolkit restores **core telephony operations** — the components required for
+agents to log in, receive contacts, and serve customers. It is designed for
+**temporary failover** with the expectation that advanced features resume once the
+source region recovers, or are manually configured if the DR instance becomes
+permanent.
+
+### Restored (agents can take calls)
+
+- Contact flows, modules, and their internal references
+- Queues, routing profiles, quick connects
+- Hours of operations (including overrides)
+- Security profiles and permissions
+- User configurations (routing/security/hierarchy assignments)
+- Agent statuses, views, evaluation forms, rules
+- Lambda function code and associations
+- Lex V2 bot associations
+- Phone number → flow mappings (numbers must be pre-claimed)
+- Instance attributes and storage configuration references
+
+### NOT Restored (operate without during DR, or configure manually)
+
+| Feature | Impact During DR | Path to Full Restoration |
+|---------|-----------------|--------------------------|
+| **Amazon Q in Connect / Wisdom** | Agents lose AI-suggested responses | Rebuild knowledge base from S3 sources + reassociate |
+| **Contact Lens / Voice Analytics** | No real-time analytics, categories, or sentiment scoring | Re-enable instance attribute; rules and vocabulary backed up but models are AWS-managed |
+| **Connect Forecasting** | No volume forecasts available | No export/import API; recreate forecasting groups manually |
+| **Connect Scheduling** | No agent schedules generated | No export/import API; recreate scheduling config manually |
+| **Outbound Campaigns** | No proactive outbound dialling | Campaign shell backed up; requires End User Messaging/SES + recipient source setup |
+| **Connect Cases** | No case tracking for multi-touch issues | Domain/fields/layouts backed up; restore automation planned |
+| **AI-powered Evaluations** | Manual evaluations still work; auto-evaluation paused | Evaluation forms restored; AI scoring models are AWS-managed |
+| **Chat AI / Bot assistants** | Chat flows work; AI-enhanced features unavailable | Lex bots restored; Amazon Q assistants require separate setup |
+| **Historical analytics / CTRs** | No historical data from source instance | Not portable; starts fresh on DR instance |
+| **Forecasting/scheduling models** | Lose trained ML models | Models are AWS-managed; retrain from scratch on DR instance |
+
+### Design Assumption
+
+> **Fail over fast, fail back when ready.**
+>
+> This toolkit optimises for RTO (time to answer calls), not feature completeness.
+> The DR instance handles live traffic with core routing while you either wait for
+> the source region to recover or complete manual setup of advanced features.
+>
+> If a regional outage extends beyond your organisation's threshold, escalate from
+> "temporary failover" to "permanent migration" using the manual steps in the
+> [DR Operator Guide](./DR_OPERATOR_GUIDE.md).
+
+---
 
 ## Scripts
 
@@ -37,31 +87,44 @@ connect_validate -m full --target <target-instance-id> source-instance
 
 ## What Gets Backed Up and Restored
 
-IDs and ARNs are re-mapped automatically during restore:
+IDs and ARNs are re-mapped automatically during restore. Resources are classified
+by what the toolkit can fully automate versus what requires manual setup.
 
-- Instance attributes and storage configs
-- Hours of operations (including overrides)
-- Queues (STANDARD type) with quick connect associations
-- Routing profiles with queue associations
-- Security profiles with permissions
-- User hierarchy structure and groups
-- Users with routing/security profile assignments
-- Quick connects
-- Contact flow modules
-- Contact flows
-- Phone numbers (flow associations)
-- Agent statuses
-- Predefined attributes
-- Task templates
-- Evaluation forms
-- Rules
-- Views
-- Vocabularies
-- Data tables
-- Email addresses
-- Cases (domains, fields, layouts, templates)
-- Outbound campaigns
-- External dependencies manifest (Lambda, Lex V2, Lex Classic)
+### Backed up and restored (automated)
+
+| Resource | Restore behaviour |
+|----------|-------------------|
+| Instance attributes | Updated on target |
+| Storage configs | Associated on target (pointing to original S3 buckets) |
+| Hours of operations + overrides | Created/updated |
+| Queues (STANDARD) + quick connect associations | Created/updated |
+| Routing profiles + queue associations | Created/updated |
+| Security profiles + permissions | New profiles created; updates flagged for manual review |
+| User hierarchy structure + groups | Created |
+| User configs (routing/security/hierarchy) | Updated on pre-existing users |
+| Quick connects | Created/updated |
+| Contact flow modules | Created/updated with ID remapping |
+| Contact flows | Created/updated with ID remapping |
+| Agent statuses | Created/updated |
+| Predefined attributes | Created/updated (system-managed skipped) |
+| Task templates | Created/updated |
+| Evaluation forms | Created; updates flagged for manual review |
+| Rules (Contact Lens, automation) | Created/updated |
+| Views (agent workspace) | Created/updated |
+| Vocabularies (Contact Lens) | Created on target |
+| Data tables (structure + row data) | Created with full content |
+| Phone number → flow mapping | Associated if number pre-claimed on target |
+| Lambda function associations | Associated |
+| Lex V2 bot associations | Associated |
+
+### Backed up only (reference for validation and manual setup)
+
+| Resource | Why not automated |
+|----------|-------------------|
+| Cases (domains, fields, layouts, templates) | Restore automation planned; currently operator must recreate |
+| Outbound campaigns | Requires End User Messaging + recipient source configuration |
+| Email addresses | Requires SES domain verification (days, not minutes) |
+| External dependencies manifest | Informational; Lambda/Lex deployed via `connect_deps_restore` |
 
 ## Prerequisites
 
@@ -265,12 +328,16 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 ### Known Limitations
 
-- Cases and Campaigns require external service setup — restore logs manual actions
-  rather than automating.
+- **Advanced features not restored** — Amazon Q, Contact Lens, Forecasting,
+  Scheduling, and Campaigns require manual setup. See the scope table above.
+- Cases domain restore is backed up but currently requires manual recreation
+  (automation planned).
 - Default security profiles (Admin, Agent, CallCenterManager) have per-instance
   defaults that intentionally differ — flagged for manual review.
 - Phone numbers cannot be claimed cross-account via API — must be provisioned
   manually on the DR instance.
+- Historical metrics, CTRs, and trained ML models are not portable between
+  instances.
 
 ### Done
 

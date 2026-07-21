@@ -1,5 +1,20 @@
 # DR Operator Guide
 
+## Recovery Scope
+
+This toolkit performs a **cold recovery of core telephony operations**. After a
+successful restore, agents can log in, receive calls and chats, and serve customers
+through your contact flows. Advanced managed features (AI, analytics, forecasting,
+scheduling) are **not restored** and either resume on failback to the source region
+or require separate manual configuration.
+
+**Read the "NOT Restored" table in the [README](./README.md) before proceeding.**
+If stakeholders expect features like Amazon Q suggestions, Contact Lens analytics,
+or workforce scheduling to be available immediately after failover, set that
+expectation now: they won't be.
+
+---
+
 ## What This Toolkit Does and Does NOT Do
 
 ### What it handles (automated)
@@ -26,7 +41,25 @@
 
 These items must be set up manually in the DR account. The toolkit **cannot**
 automate them because they involve identity systems, telephony provisioning,
-or application-layer concerns that are outside the Amazon Connect API scope.
+managed ML models, or service-level configurations that have no export/import API.
+
+**Critical:** The following features will be **unavailable** on the DR instance
+until manually configured. Agents can still take calls — these are enhancements,
+not core routing:
+
+| Feature | Status on DR Instance | Action Required |
+|---------|----------------------|-----------------|
+| Amazon Q / Wisdom / AI Assistants | Unavailable | Rebuild knowledge base from S3 source data |
+| Contact Lens real-time analytics | Unavailable | Enable attribute; models retrain automatically over time |
+| Connect Forecasting | Unavailable | No API; recreate forecasting groups in console |
+| Connect Scheduling | Unavailable | No API; recreate scheduling configuration in console |
+| Outbound Campaigns | Unavailable | Create campaigns; configure End User Messaging/SES |
+| Connect Cases | Unavailable | Create domain + fields + layouts + templates (automation planned) |
+| AI auto-evaluations | Unavailable (manual evaluations work) | Evaluation forms restored; AI scoring resumes when Contact Lens active |
+| Historical metrics/CTRs | Empty (no history from source) | Not portable between instances |
+| Phone numbers | Must be pre-claimed | Claim in console or use Global Resiliency |
+| Users | Must be pre-provisioned | Create via Identity Center/console before restore |
+| Storage (S3/KMS) | Must be pre-configured | Create buckets and keys in DR account |
 
 ---
 
@@ -209,7 +242,9 @@ Re-run after each batch of manual fixes until you reach PASS.
 
 ## What "Ready for Traffic" Means
 
-The instance is ready for live traffic when:
+### Tier 1: Core Telephony (target of this toolkit)
+
+The instance can handle live calls when:
 
 1. `connect_validate -m full` returns **PASS** (0 failures)
 2. All manual actions from this checklist are complete
@@ -223,3 +258,20 @@ partially automate item 4:
 ```bash
 connect_validate -m smoke --target <instance-id> <backup-dir>
 ```
+
+### Tier 2: Full Feature Parity (manual, post-failover)
+
+If the DR instance becomes permanent (source region not recovering), these
+require separate work:
+
+- [ ] Amazon Q / Wisdom knowledge bases rebuilt and associated
+- [ ] Contact Lens re-enabled and rules active
+- [ ] Forecasting groups recreated and models training
+- [ ] Scheduling configuration rebuilt
+- [ ] Outbound campaigns recreated with End User Messaging configuration
+- [ ] Cases domain and configuration restored
+- [ ] Historical reporting dashboards reconfigured (new instance = new data)
+
+**Decision point:** If the source region recovers within your organisation's
+threshold (typically 4-24 hours), fail back to the source instance rather than
+completing Tier 2. All advanced features resume immediately on failback.

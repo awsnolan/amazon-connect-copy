@@ -171,6 +171,32 @@ if [ -s $TEMPFILE ]; then
             --instance-id $instance_id \
             --table-id $dt_id \
             > "$instance_alias_dir/datatable_$dt_name_encoded.json" 2>/dev/null || true
+
+        # Export row data (primary values + full row content)
+        echo "  Exporting row data for $dt_name..."
+        dt_data_file="$instance_alias_dir/datatable_data_$dt_name_encoded.json"
+        > "$dt_data_file"
+        primary_values=$(aws_connect list-data-table-primary-values \
+            --instance-id $instance_id \
+            --table-id $dt_id \
+            --max-items $maxitems 2>/dev/null)
+        if [ -n "$primary_values" ]; then
+            row_count=$(echo "$primary_values" | jq '.PrimaryValues | length' 2>/dev/null || echo "0")
+            if [ "$row_count" -gt 0 ]; then
+                # Fetch all values for this table
+                aws_connect list-data-table-values \
+                    --instance-id $instance_id \
+                    --table-id $dt_id \
+                    --max-items $maxitems 2>/dev/null |
+                jq -c '.Values[]?' >> "$dt_data_file" 2>/dev/null || true
+                exported_rows=$(wc -l < "$dt_data_file" | tr -d ' ')
+                echo "  $exported_rows rows exported"
+            else
+                echo "  0 rows (empty table)"
+            fi
+        else
+            echo "  (could not list primary values — table may be empty)"
+        fi
     done < <(    jq -r ".TableId + \" \" + .TableName" "$instance_alias_dir/datatables.json" | tr -d '\r')
     test $? -eq 0 || error
 else

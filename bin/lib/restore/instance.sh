@@ -50,9 +50,60 @@ cat <<EOD
 Instance Storage Configs
 ------------------------
 EOD
-if [ -f "$instance_alias_dir_a/storage_configs.json" ]; then
-    echo "Storage configs recorded — will require manual configuration."
-    manual_action "Storage Configs" "Configure S3 buckets and KMS keys on target. Source: $instance_alias_dir_a/storage_configs.json"
+if [ -f "$instance_alias_dir_a/storage_configs.json" ] && [ -s "$instance_alias_dir_a/storage_configs.json" ]; then
+    storage_count=$(jq -s 'length' "$instance_alias_dir_a/storage_configs.json" 2>/dev/null || echo "0")
+    if [ "$storage_count" -gt 0 ]; then
+        echo "Restoring $storage_count storage config(s) (pointing to original S3 buckets)"
+        while IFS= read -r sc_json; do
+            [ -z "$sc_json" ] && continue
+            resource_type=$(echo "$sc_json" | jq -r '.ResourceType // empty')
+            storage_type=$(echo "$sc_json" | jq -r '.StorageConfig.StorageType // empty')
+            [ -z "$resource_type" ] && continue
+            [ -z "$storage_type" ] && continue
+
+            # Build the associate payload — use source bucket/config as-is (cross-account access assumed)
+            sc_payload=$(echo "$sc_json" | jq --arg iid "$instance_id_b" \
+                '{InstanceId: $iid, ResourceType: .ResourceType, StorageConfig: .StorageConfig}')
+
+            cat <<EOD >> "$helper_log"
+
+$actionLead Associate storage config: $resource_type ($storage_type)
+EOD
+            if [ -n "$dryrun" ]; then
+                echo -e "  [dry] Would associate storage: $resource_type → $storage_type"
+                verbose_detail "associate-instance-storage-config --instance-id $instance_id_b --resource-type $resource_type"
+                continue
+            fi
+
+            # Try to associate; if already exists, update instead
+            assoc_output=$(aws_connect associate-instance-storage-config \
+                --instance-id "$instance_id_b" \
+                --resource-type "$resource_type" \
+                --storage-config "$(echo "$sc_json" | jq -c '.StorageConfig')" 2>/dev/null) || true
+
+            if [ -n "$assoc_output" ]; then
+                echo -e "  ${C_PASS}✓ Associated storage: $resource_type → $storage_type${C_RESET}"
+            else
+                # Already configured — try update
+                assoc_id=$(aws_connect list-instance-storage-configs \
+                    --instance-id "$instance_id_b" \
+                    --resource-type "$resource_type" 2>/dev/null |
+                    jq -r '.StorageConfigs[0].AssociationId // empty' | dos2unix)
+                if [ -n "$assoc_id" ]; then
+                    aws_connect update-instance-storage-config \
+                        --instance-id "$instance_id_b" \
+                        --association-id "$assoc_id" \
+                        --resource-type "$resource_type" \
+                        --storage-config "$(echo "$sc_json" | jq -c '.StorageConfig')" 2>/dev/null || true
+                    echo -e "  ${C_PASS}✓ Updated storage: $resource_type → $storage_type${C_RESET}"
+                else
+                    echo -e "  ${C_WARN}⚠ Could not associate or update storage for $resource_type${C_RESET}"
+                fi
+            fi
+        done < <(jq -c '.' "$instance_alias_dir_a/storage_configs.json" 2>/dev/null)
+    else
+        echo "No storage configs to restore (file empty)"
+    fi
 else
     echo "No instance storage configs file found (skipping)"
 fi

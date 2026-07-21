@@ -1,0 +1,9 @@
+{
+  "Vocabulary": {
+    "VocabularyId": "11111111-7777-8888-9999-aaaaaaaaaaaa",
+    "VocabularyName": "InsuranceTerms",
+    "LanguageCode": "en-AU",
+    "State": "ACTIVE",
+    "Content": "Phrase\tIPA\tSoundsLike\tDisplayAs\nCTP\t\tC T P\tCTP\nTPD\t\tT P D\tTPD\nPDS\t\tP D S\tPDS"
+  }
+}

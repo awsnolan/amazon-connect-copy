@@ -953,10 +953,122 @@ else
 fi
 
 ###############################################################################
-# Test Suite 15: Negative Testing (broken/orphaned fixtures)
+# Test Suite 15: Vocabulary, Storage Config, Data Table
 ###############################################################################
 
-section_start "Suite 15: Negative Testing (broken fixtures)"
+section_start "Suite 15: Vocabulary, Storage & Data Tables"
+
+test_start "Vocabulary fixture has correct structure"
+if jq -e '.Vocabulary.VocabularyId and .Vocabulary.VocabularyName and .Vocabulary.LanguageCode and .Vocabulary.Content' "$FIXTURES_DIR/source/vocabulary_InsuranceTerms.json" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "vocabulary detail missing required fields"
+fi
+
+test_start "Plan lists vocabulary as new (not on target)"
+if [ -f "$OUTPUT_DIR/helper/helper.new" ]; then
+    if grep -q "vocabulary_InsuranceTerms" "$OUTPUT_DIR/helper/helper.new"; then
+        test_pass
+    else
+        test_fail "vocabulary not in helper.new"
+    fi
+else
+    test_skip "helper.new not available"
+fi
+
+test_start "Plan lists data table as new (not on target)"
+if [ -f "$OUTPUT_DIR/helper/helper.new" ]; then
+    if grep -q "datatable_RoutingLookup" "$OUTPUT_DIR/helper/helper.new"; then
+        test_pass
+    else
+        test_fail "datatable not in helper.new"
+    fi
+else
+    test_skip "helper.new not available"
+fi
+
+test_start "Data table detail file has correct structure"
+if jq -e '.TableId and .TableName and .Attributes' "$FIXTURES_DIR/source/datatable_RoutingLookup.json" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "datatable detail missing required fields"
+fi
+
+test_start "Data table row data file exists and has rows"
+if [ -f "$FIXTURES_DIR/source/datatable_data_RoutingLookup.json" ]; then
+    row_count=$(wc -l < "$FIXTURES_DIR/source/datatable_data_RoutingLookup.json" | tr -d ' ')
+    if [ "$row_count" -gt 0 ]; then
+        test_pass
+    else
+        test_fail "row data file is empty"
+    fi
+else
+    test_fail "datatable_data_RoutingLookup.json not found"
+fi
+
+test_start "Data table row data is valid JSON per line"
+all_valid=true
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    if ! echo "$line" | jq . >/dev/null 2>&1; then
+        all_valid=false
+        break
+    fi
+done < "$FIXTURES_DIR/source/datatable_data_RoutingLookup.json"
+if [ "$all_valid" = "true" ]; then
+    test_pass
+else
+    test_fail "invalid JSON in row data"
+fi
+
+test_start "Storage config fixture has correct structure"
+if jq -es 'all(.ResourceType and .StorageConfig)' "$FIXTURES_DIR/source/storage_configs.json" >/dev/null 2>&1; then
+    test_pass
+else
+    test_fail "storage config missing ResourceType or StorageConfig"
+fi
+
+test_start "Dry-run mentions storage config restore"
+if [ -d "$OUTPUT_DIR/helper" ]; then
+    output=$("$BIN_DIR/connect_restore" -d -e "$OUTPUT_DIR/helper" 2>&1)
+    if echo "$output" | grep -qi "storage\|S3\|CALL_RECORDINGS"; then
+        test_pass
+    else
+        test_fail "no storage mention in dry-run"
+    fi
+else
+    test_skip "helper not available"
+fi
+
+test_start "Dry-run mentions vocabulary restore"
+if [ -d "$OUTPUT_DIR/helper" ]; then
+    output=$("$BIN_DIR/connect_restore" -d -e "$OUTPUT_DIR/helper" 2>&1)
+    if echo "$output" | grep -qi "vocabular\|InsuranceTerms"; then
+        test_pass
+    else
+        test_fail "no vocabulary mention in dry-run"
+    fi
+else
+    test_skip "helper not available"
+fi
+
+test_start "Dry-run mentions data table restore"
+if [ -d "$OUTPUT_DIR/helper" ]; then
+    output=$("$BIN_DIR/connect_restore" -d -e "$OUTPUT_DIR/helper" 2>&1)
+    if echo "$output" | grep -qi "data table\|RoutingLookup"; then
+        test_pass
+    else
+        test_fail "no data table mention in dry-run"
+    fi
+else
+    test_skip "helper not available"
+fi
+
+###############################################################################
+# Test Suite 16: Negative Testing (broken/orphaned fixtures)
+###############################################################################
+
+section_start "Suite 16: Negative Testing (broken fixtures)"
 
 BROKEN_DIR="$FIXTURES_DIR/broken"
 
@@ -1078,11 +1190,11 @@ else
 fi
 
 ###############################################################################
-# Test Suite 16: Live Integration Tests (requires --live flag + AWS credentials)
+# Test Suite 17: Live Integration Tests (requires --live flag + AWS credentials)
 ###############################################################################
 
 if [ "$RUN_LIVE" = "true" ]; then
-    section_start "Suite 16: Live Integration Tests"
+    section_start "Suite 17: Live Integration Tests"
 
     # Check credentials
     test_start "AWS credentials are valid"
@@ -1201,7 +1313,7 @@ if [ "$RUN_LIVE" = "true" ]; then
         fi
     fi
 else
-    section_start "Suite 16: Live Integration Tests"
+    section_start "Suite 17: Live Integration Tests"
     echo "  (skipped — run with --live to enable)"
 fi
 

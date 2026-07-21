@@ -489,3 +489,173 @@ EOD
 fi
 
 ############################################################
+
+############################################################
+#
+# Vocabularies (Contact Lens)
+#
+
+cat <<EOD
+
+Vocabularies
+------------
+EOD
+egrep "^vocabulary_" "$helper_new" > $TEMPNEW 2>/dev/null || true
+if [ ! -s $TEMPNEW ]; then
+    echo "No vocabularies to create"
+else
+    num_vocab=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_vocab vocabularies"
+    ii=0
+    sort $TEMPNEW |
+    while read vocab_json; do
+        ii=$[ii+1]
+        echo "$ii. $vocab_json"
+        vocab_name=${vocab_json#vocabulary_}
+        vocab_name=${vocab_name%.json}
+        vocab_name_decoded=$(path_decode "$vocab_name")
+
+        vocab_id_a=$(jq -r ".Vocabulary.VocabularyId // .VocabularyId // empty" "$instance_alias_dir_a/$vocab_json" | dos2unix)
+        vocab_language=$(jq -r ".Vocabulary.LanguageCode // .LanguageCode // empty" "$instance_alias_dir_a/$vocab_json" | dos2unix)
+        vocab_content=$(jq -r ".Vocabulary.Content // .Content // empty" "$instance_alias_dir_a/$vocab_json" | dos2unix)
+
+        if [ -z "$vocab_language" ] || [ -z "$vocab_content" ]; then
+            echo "  WARNING: Missing language or content for vocabulary $vocab_name_decoded — skipping"
+            continue
+        fi
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create vocabulary: $vocab_name_decoded (language: $vocab_language)
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+  [dry] Would create vocabulary: $vocab_name_decoded (language: $vocab_language)
+EOD
+            verbose_detail "create-vocabulary --vocabulary-name $vocab_name_decoded --language-code $vocab_language --content <${#vocab_content} chars>"
+            continue
+        fi
+
+        create_output=$(aws_connect create-vocabulary \
+            --instance-id $instance_id_b \
+            --vocabulary-name "$vocab_name_decoded" \
+            --language-code "$vocab_language" \
+            --content "$vocab_content" 2>/dev/null) || true
+
+        if [ -n "$create_output" ]; then
+            vocab_id_b=$(echo "$create_output" | jq -r '.VocabularyId // empty' | dos2unix)
+            echo -e "  ${C_PASS}✓ Created vocabulary: $vocab_name_decoded (ID: $vocab_id_b)${C_RESET}"
+            if [ -n "$vocab_id_a" ] && [ -n "$vocab_id_b" ]; then
+                cat <<EOD >> "$helper_sed"
+# Vocabulary: $vocab_name_decoded
+s%$vocab_id_a%$vocab_id_b%g
+EOD
+            fi
+            # Wait for vocabulary to become ACTIVE (async creation)
+            echo -n "    Waiting for ACTIVE state..."
+            for attempt in 1 2 3 4 5 6; do
+                sleep 5
+                vocab_state=$(aws_connect describe-vocabulary \
+                    --instance-id $instance_id_b \
+                    --vocabulary-id $vocab_id_b 2>/dev/null | jq -r '.Vocabulary.State // empty' | dos2unix)
+                [ "$vocab_state" = "ACTIVE" ] && break
+            done
+            if [ "$vocab_state" = "ACTIVE" ]; then
+                echo -e " ${C_PASS}ACTIVE${C_RESET}"
+            else
+                echo -e " ${C_WARN}state=$vocab_state (may still be processing)${C_RESET}"
+            fi
+        else
+            echo -e "  ${C_FAIL}✗ Failed to create vocabulary: $vocab_name_decoded${C_RESET}" >&2
+        fi
+    done
+    test $? -eq 0 || error
+fi
+
+############################################################
+#
+# Data Tables (structure + row data)
+#
+
+cat <<EOD
+
+Data Tables
+-----------
+EOD
+egrep "^datatable_" "$helper_new" > $TEMPNEW 2>/dev/null || true
+if [ ! -s $TEMPNEW ]; then
+    echo "No data tables to create"
+else
+    num_dt=$(echo $(cat $TEMPNEW | wc -l))
+    echo -e "\nCreating $num_dt data tables"
+    ii=0
+    sort $TEMPNEW |
+    while read dt_json; do
+        ii=$[ii+1]
+        echo "$ii. $dt_json"
+        dt_name=${dt_json#datatable_}
+        dt_name=${dt_name%.json}
+        dt_name_decoded=$(path_decode "$dt_name")
+
+        dt_id_a=$(jq -r ".TableId // empty" "$instance_alias_dir_a/$dt_json" | dos2unix)
+
+        # Build create payload from describe output
+        cat "$instance_alias_dir_a/$dt_json" |
+        jq --arg iid $instance_id_b \
+            '{InstanceId: $iid, TableName: .TableName, Description: (.Description // ""), Attributes: [(.Attributes // [])[] | del(.AttributeId)]}' \
+        > "$helper/$dt_json" 2>/dev/null
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create data table: $dt_name_decoded
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+  [dry] Would create data table: $dt_name_decoded
+EOD
+            verbose_detail "create-data-table --cli-input-json file://$helper/$dt_json"
+            # Check for row data
+            dt_data_file="$instance_alias_dir_a/datatable_data_${dt_name}.json"
+            if [ -f "$dt_data_file" ] && [ -s "$dt_data_file" ]; then
+                row_count=$(jq -s 'length' "$dt_data_file" 2>/dev/null || echo "0")
+                verbose_detail "Would restore $row_count rows of data"
+            fi
+            continue
+        fi
+
+        create_output=$(aws_connect create-data-table \
+            --cli-input-json "file://$helper/$dt_json" 2>/dev/null) || true
+
+        if [ -n "$create_output" ]; then
+            dt_id_b=$(echo "$create_output" | jq -r '.TableId // empty' | dos2unix)
+            echo -e "  ${C_PASS}✓ Created data table: $dt_name_decoded (ID: $dt_id_b)${C_RESET}"
+            if [ -n "$dt_id_a" ] && [ -n "$dt_id_b" ]; then
+                cat <<EOD >> "$helper_sed"
+# Data Table: $dt_name_decoded
+s%$dt_id_a%$dt_id_b%g
+EOD
+            fi
+
+            # Restore row data if available
+            dt_data_file="$instance_alias_dir_a/datatable_data_${dt_name}.json"
+            if [ -f "$dt_data_file" ] && [ -s "$dt_data_file" ]; then
+                row_count=$(jq -s 'length' "$dt_data_file" 2>/dev/null || echo "0")
+                echo "    Restoring $row_count rows..."
+                # Process rows individually via batch-create-data-table-value
+                batch_file="$helper/dt_batch_${dt_name}.json"
+                while IFS= read -r row_json; do
+                    [ -z "$row_json" ] && continue
+                    echo "$row_json" |
+                    jq --arg iid "$instance_id_b" --arg tid "$dt_id_b" \
+                        '. + {InstanceId: $iid, TableId: $tid}' > "$batch_file"
+                    aws_connect batch-create-data-table-value \
+                        --cli-input-json "file://$batch_file" 2>/dev/null || true
+                done < <(jq -c '.' "$dt_data_file" 2>/dev/null)
+                echo -e "    ${C_PASS}✓ Row data restored${C_RESET}"
+            fi
+        else
+            echo -e "  ${C_FAIL}✗ Failed to create data table: $dt_name_decoded${C_RESET}" >&2
+        fi
+    done
+    test $? -eq 0 || error
+fi
