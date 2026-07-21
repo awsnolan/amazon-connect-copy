@@ -1,0 +1,15 @@
+{
+  "Id": "22222222-4444-5555-6666-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/security-profile/22222222-4444-5555-6666-aaaaaaaaaaaa",
+  "Name": "Admin"
+}
+{
+  "Id": "22222222-4444-5555-6666-bbbbbbbbbbbb",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/security-profile/22222222-4444-5555-6666-bbbbbbbbbbbb",
+  "Name": "Agent"
+}
+{
+  "Id": "22222222-4444-5555-6666-cccccccccccc",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/security-profile/22222222-4444-5555-6666-cccccccccccc",
+  "Name": "CallCenterManager"
+}

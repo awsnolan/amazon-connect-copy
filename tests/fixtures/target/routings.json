@@ -1,0 +1,5 @@
+{
+  "Id": "22222222-3333-4444-5555-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/routing-profile/22222222-3333-4444-5555-aaaaaaaaaaaa",
+  "Name": "Basic Routing Profile"
+}

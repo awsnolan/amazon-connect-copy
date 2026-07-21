@@ -1,0 +1,10 @@
+{
+  "Id": "11111111-1111-1111-1111-111111111111",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/operating-hours/11111111-1111-1111-1111-111111111111",
+  "Name": "Business Hours"
+}
+{
+  "Id": "11111111-1111-1111-1111-222222222222",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/operating-hours/11111111-1111-1111-1111-222222222222",
+  "Name": "After Hours"
+}

@@ -1,0 +1,10 @@
+{
+  "Id": "22222222-6666-7777-8888-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/prompt/22222222-6666-7777-8888-aaaaaaaaaaaa",
+  "Name": "Beep.wav"
+}
+{
+  "Id": "22222222-6666-7777-8888-bbbbbbbbbbbb",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/prompt/22222222-6666-7777-8888-bbbbbbbbbbbb",
+  "Name": "CustomerQueue.wav"
+}

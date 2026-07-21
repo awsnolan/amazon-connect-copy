@@ -1,0 +1,12 @@
+{
+  "Id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "IdentityManagementType": "CONNECT_MANAGED",
+  "InstanceAlias": "source",
+  "CreatedTime": "2024-01-01T00:00:00+00:00",
+  "ServiceRole": "arn:aws:iam::111111111111:role/aws-service-role/connect.amazonaws.com/AWSServiceRoleForAmazonConnect_test",
+  "InstanceStatus": "ACTIVE",
+  "InboundCallsEnabled": true,
+  "OutboundCallsEnabled": true,
+  "InstanceAccessUrl": "https://<instance-alias>.my.connect.aws"
+}

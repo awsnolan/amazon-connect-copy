@@ -1,0 +1,12 @@
+{
+  "RoutingProfileQueueConfigSummaryList": [
+    {
+      "QueueId": "22222222-2222-3333-4444-aaaaaaaaaaaa",
+      "QueueArn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/queue/22222222-2222-3333-4444-aaaaaaaaaaaa",
+      "QueueName": "GeneralQueue",
+      "Priority": 1,
+      "Delay": 0,
+      "Channel": "VOICE"
+    }
+  ]
+}

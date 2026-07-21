@@ -1,0 +1,6 @@
+{
+  "SecurityProfileId": "11111111-4444-5555-6666-cccccccccccc",
+  "OrganizationResourceId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+  "SecurityProfileName": "CallCenterManager",
+  "Description": "Manager access"
+}

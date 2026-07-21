@@ -1,0 +1,10 @@
+{
+  "RoutingProfileId": "11111111-3333-4444-5555-aaaaaaaaaaaa",
+  "RoutingProfileArn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/routing-profile/11111111-3333-4444-5555-aaaaaaaaaaaa",
+  "Name": "Basic Routing Profile",
+  "Description": "Default routing profile",
+  "DefaultOutboundQueueId": "deadbeef-0000-1111-2222-queue-missing",
+  "MediaConcurrencies": [
+    {"Channel": "VOICE", "Concurrency": 1}
+  ]
+}

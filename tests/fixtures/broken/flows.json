@@ -1,0 +1,17 @@
+{
+  "Id": "11111111-5555-6666-7777-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/contact-flow/11111111-5555-6666-7777-aaaaaaaaaaaa",
+  "Name": "Default agent hold",
+  "ContactFlowType": "AGENT_HOLD",
+  "ContactFlowState": "ACTIVE",
+  "ContactFlowStatus": "PUBLISHED"
+}
+{
+  "Id": "11111111-5555-6666-7777-cccccccccccc",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/contact-flow/11111111-5555-6666-7777-cccccccccccc",
+  "Name": "Orphaned Flow",
+  "ContactFlowType": "CONTACT_FLOW",
+  "ContactFlowState": "ACTIVE",
+  "ContactFlowStatus": "PUBLISHED",
+  "Description": "References resources that were not backed up"
+}

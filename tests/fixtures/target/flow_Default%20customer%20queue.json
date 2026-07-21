@@ -1,0 +1,9 @@
+{
+  "Id": "22222222-5555-6666-7777-bbbbbbbbbbbb",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/contact-flow/22222222-5555-6666-7777-bbbbbbbbbbbb",
+  "Name": "Default customer queue",
+  "Type": "CUSTOMER_QUEUE",
+  "State": "ACTIVE",
+  "Status": "PUBLISHED",
+  "Content": "{\"Version\":\"2019-10-30\",\"StartAction\":\"action1\",\"Actions\":[{\"Identifier\":\"action1\",\"Type\":\"MessageParticipant\",\"Parameters\":{\"Text\":\"Thank you for waiting.\"},\"Transitions\":{\"NextAction\":\"action2\"}},{\"Identifier\":\"action2\",\"Type\":\"EndFlowExecution\",\"Parameters\":{},\"Transitions\":{}}]}"
+}

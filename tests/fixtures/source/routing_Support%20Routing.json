@@ -1,0 +1,12 @@
+{
+  "RoutingProfileId": "11111111-3333-4444-5555-bbbbbbbbbbbb",
+  "RoutingProfileArn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/routing-profile/11111111-3333-4444-5555-bbbbbbbbbbbb",
+  "Name": "Support Routing",
+  "Description": "Support team routing",
+  "DefaultOutboundQueueId": "11111111-2222-3333-4444-bbbbbbbbbbbb",
+  "MediaConcurrencies": [
+    {"Channel": "VOICE", "Concurrency": 1},
+    {"Channel": "CHAT", "Concurrency": 3},
+    {"Channel": "TASK", "Concurrency": 5}
+  ]
+}

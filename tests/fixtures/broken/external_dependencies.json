@@ -1,0 +1,19 @@
+{
+  "Lambdas": [
+    {
+      "Arn": "arn:aws:lambda:us-east-1:111111111111:function:missing-lambda-function",
+      "Name": "missing-lambda-function"
+    },
+    {
+      "Arn": "arn:aws:lambda:us-east-1:111111111111:function:also-not-deployed",
+      "Name": "also-not-deployed"
+    }
+  ],
+  "LexV2Bots": [
+    {
+      "Arn": "arn:aws:lex:us-east-1:111111111111:bot/NONEXISTENTBOT",
+      "Name": "GhostBot"
+    }
+  ],
+  "LexClassicBots": []
+}

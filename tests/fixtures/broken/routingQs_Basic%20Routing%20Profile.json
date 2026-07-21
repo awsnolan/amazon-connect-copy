@@ -1,0 +1,20 @@
+{
+  "RoutingProfileQueueConfigSummaryList": [
+    {
+      "QueueId": "11111111-2222-3333-4444-aaaaaaaaaaaa",
+      "QueueArn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa",
+      "QueueName": "GeneralQueue",
+      "Priority": 1,
+      "Delay": 0,
+      "Channel": "VOICE"
+    },
+    {
+      "QueueId": "deadbeef-9999-8888-7777-queue-deleted",
+      "QueueArn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/deadbeef-9999-8888-7777-queue-deleted",
+      "QueueName": "DeletedQueue",
+      "Priority": 2,
+      "Delay": 0,
+      "Channel": "VOICE"
+    }
+  ]
+}

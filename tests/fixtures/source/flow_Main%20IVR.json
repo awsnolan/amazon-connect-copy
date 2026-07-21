@@ -1,0 +1,10 @@
+{
+  "Id": "11111111-5555-6666-7777-cccccccccccc",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/contact-flow/11111111-5555-6666-7777-cccccccccccc",
+  "Name": "Main IVR",
+  "Type": "CONTACT_FLOW",
+  "State": "ACTIVE",
+  "Status": "PUBLISHED",
+  "Description": "Primary inbound contact flow",
+  "Content": "{\"Version\":\"2019-10-30\",\"StartAction\":\"action1\",\"Actions\":[{\"Identifier\":\"action1\",\"Type\":\"MessageParticipant\",\"Parameters\":{\"Text\":\"Welcome to our service.\"},\"Transitions\":{\"NextAction\":\"action2\"}},{\"Identifier\":\"action2\",\"Type\":\"UpdateContactTargetQueue\",\"Parameters\":{\"QueueId\":\"arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa\"},\"Transitions\":{\"NextAction\":\"action3\"}},{\"Identifier\":\"action3\",\"Type\":\"TransferContactToQueue\",\"Parameters\":{},\"Transitions\":{}}]}"
+}

@@ -1,0 +1,10 @@
+{
+  "Id": "11111111-3333-4444-5555-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/routing-profile/11111111-3333-4444-5555-aaaaaaaaaaaa",
+  "Name": "Basic Routing Profile"
+}
+{
+  "Id": "11111111-3333-4444-5555-bbbbbbbbbbbb",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/routing-profile/11111111-3333-4444-5555-bbbbbbbbbbbb",
+  "Name": "Support Routing"
+}

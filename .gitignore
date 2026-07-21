@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Editor / IDE
+.vscode/
+
+# Backup output directories (contain real instance data)
+# These are produced by connect_backup runs — never commit
+*.log
+*.var
+
+# SAM build artifacts
+.aws-sam/
+
+# Archives
+*.zip
+
+# Office temp files
+~$*
+
+# Compiled Python
+__pycache__/
+*.pyc
+
+# Test automation artifacts
+tests/output/

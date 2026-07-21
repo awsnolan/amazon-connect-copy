@@ -1,0 +1,5 @@
+{
+  "Id": "11111111-6666-7777-8888-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/prompt/11111111-6666-7777-8888-aaaaaaaaaaaa",
+  "Name": "Beep.wav"
+}

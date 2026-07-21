@@ -1,0 +1,12 @@
+{
+  "Id": "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
+  "IdentityManagementType": "CONNECT_MANAGED",
+  "InstanceAlias": "target",
+  "CreatedTime": "2024-06-01T00:00:00+00:00",
+  "ServiceRole": "arn:aws:iam::222222222222:role/aws-service-role/connect.amazonaws.com/AWSServiceRoleForAmazonConnect_dr",
+  "InstanceStatus": "ACTIVE",
+  "InboundCallsEnabled": true,
+  "OutboundCallsEnabled": true,
+  "InstanceAccessUrl": "https://<instance-alias>.my.connect.aws"
+}

@@ -1,0 +1,9 @@
+{
+  "QueueId": "22222222-2222-3333-4444-aaaaaaaaaaaa",
+  "QueueArn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/queue/22222222-2222-3333-4444-aaaaaaaaaaaa",
+  "Name": "GeneralQueue",
+  "Description": "General purpose queue",
+  "HoursOfOperationId": "22222222-1111-1111-1111-111111111111",
+  "MaxContacts": 10,
+  "Status": "ENABLED"
+}

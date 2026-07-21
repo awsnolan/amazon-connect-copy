@@ -1,0 +1,9 @@
+{
+  "Id": "11111111-aaaa-bbbb-cccc-333333333333",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/agent/11111111-aaaa-bbbb-cccc-333333333333",
+  "Username": "supervisor1",
+  "IdentityInfo": {"FirstName": "Test", "LastName": "Supervisor"},
+  "PhoneConfig": {"PhoneType": "SOFT_PHONE", "AutoAccept": false, "AfterContactWorkTimeLimit": 60},
+  "RoutingProfileId": "11111111-3333-4444-5555-aaaaaaaaaaaa",
+  "SecurityProfileIds": ["11111111-4444-5555-6666-cccccccccccc"]
+}

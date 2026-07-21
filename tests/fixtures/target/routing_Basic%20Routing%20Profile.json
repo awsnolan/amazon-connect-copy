@@ -1,0 +1,11 @@
+{
+  "RoutingProfileId": "22222222-3333-4444-5555-aaaaaaaaaaaa",
+  "RoutingProfileArn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/routing-profile/22222222-3333-4444-5555-aaaaaaaaaaaa",
+  "Name": "Basic Routing Profile",
+  "Description": "Default routing profile",
+  "DefaultOutboundQueueId": "22222222-2222-3333-4444-aaaaaaaaaaaa",
+  "MediaConcurrencies": [
+    {"Channel": "VOICE", "Concurrency": 1},
+    {"Channel": "CHAT", "Concurrency": 2}
+  ]
+}

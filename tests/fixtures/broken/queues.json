@@ -1,0 +1,6 @@
+{
+  "Id": "11111111-2222-3333-4444-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa",
+  "Name": "GeneralQueue",
+  "QueueType": "STANDARD"
+}

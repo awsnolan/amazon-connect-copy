@@ -1,0 +1,9 @@
+{
+  "QueueId": "11111111-2222-3333-4444-bbbbbbbbbbbb",
+  "QueueArn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-bbbbbbbbbbbb",
+  "Name": "SupportQueue",
+  "Description": "Support team queue",
+  "HoursOfOperationId": "11111111-1111-1111-1111-222222222222",
+  "MaxContacts": 5,
+  "Status": "ENABLED"
+}

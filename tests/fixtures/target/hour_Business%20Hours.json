@@ -1,0 +1,14 @@
+{
+  "HoursOfOperationId": "22222222-1111-1111-1111-111111111111",
+  "HoursOfOperationArn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/operating-hours/22222222-1111-1111-1111-111111111111",
+  "Name": "Business Hours",
+  "Description": "Standard business hours",
+  "TimeZone": "Australia/Sydney",
+  "Config": [
+    {"Day": "MONDAY", "StartTime": {"Hours": 8, "Minutes": 0}, "EndTime": {"Hours": 17, "Minutes": 0}},
+    {"Day": "TUESDAY", "StartTime": {"Hours": 8, "Minutes": 0}, "EndTime": {"Hours": 17, "Minutes": 0}},
+    {"Day": "WEDNESDAY", "StartTime": {"Hours": 8, "Minutes": 0}, "EndTime": {"Hours": 17, "Minutes": 0}},
+    {"Day": "THURSDAY", "StartTime": {"Hours": 8, "Minutes": 0}, "EndTime": {"Hours": 17, "Minutes": 0}},
+    {"Day": "FRIDAY", "StartTime": {"Hours": 8, "Minutes": 0}, "EndTime": {"Hours": 17, "Minutes": 0}}
+  ]
+}

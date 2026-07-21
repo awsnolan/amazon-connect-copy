@@ -1,0 +1,19 @@
+{
+  "Lambdas": [
+    {
+      "Arn": "arn:aws:lambda:us-east-1:111111111111:function:source-customer-lookup",
+      "Name": "source-customer-lookup"
+    },
+    {
+      "Arn": "arn:aws:lambda:us-east-1:111111111111:function:source-after-hours",
+      "Name": "source-after-hours"
+    }
+  ],
+  "LexV2Bots": [
+    {
+      "Arn": "arn:aws:lex:us-east-1:111111111111:bot/TESTBOT1",
+      "Name": "MainMenuBot"
+    }
+  ],
+  "LexClassicBots": []
+}

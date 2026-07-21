@@ -1,0 +1,15 @@
+{
+  "Id": "11111111-aaaa-bbbb-cccc-111111111111",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/agent/11111111-aaaa-bbbb-cccc-111111111111",
+  "Username": "agent1"
+}
+{
+  "Id": "11111111-aaaa-bbbb-cccc-222222222222",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/agent/11111111-aaaa-bbbb-cccc-222222222222",
+  "Username": "admin1"
+}
+{
+  "Id": "11111111-aaaa-bbbb-cccc-333333333333",
+  "Arn": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/agent/11111111-aaaa-bbbb-cccc-333333333333",
+  "Username": "supervisor1"
+}

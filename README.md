@@ -66,7 +66,7 @@ IDs and ARNs are re-mapped automatically during restore:
 ## Prerequisites
 
 ### Software
-1. [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) (2.9.4 or higher)
+1. [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) (2.32 or higher)
 2. [jq](https://stedolan.github.io/jq/) (1.6 or higher)
 3. bash 4.0+ (macOS, Linux, CloudShell, WSL)
 
@@ -260,8 +260,6 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 - [ ] **CI/CD pipeline integration** — wire validate JSON output into automated DR
   runbooks to gate DNS failover.
-- [ ] **Integration test harness** — fixture-based test for the full pipeline without
-  a live instance.
 - [ ] **Scheduled backup automation** — CodeBuild on a schedule with S3 storage and
   lifecycle retention. See [BACKLOG.md](./BACKLOG.md).
 
@@ -299,6 +297,11 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
   `NO_COLOR` env var support. Auto-disables when piped.
 - [x] **Consistent layered output** — all scripts use `section_header()` from
   `common.sh` with `━━━` style and timestamps.
+- [x] **Integration test harness** — 122 offline tests covering syntax, CLI interface,
+  local validation, plan correctness, SED remapping, same-instance regression, JSON
+  output schema, dry-run verification, and edge cases. Live integration suite (6 tests)
+  available with `--live` flag. See [tests/README.md](./tests/README.md).
+
 - [x] **Remediation guide in validate output** — per-layer fix instructions with AWS
   documentation links, shown only on FAIL. Covers all 18 layers including critical
   callouts for users, phone numbers, and external dependencies.

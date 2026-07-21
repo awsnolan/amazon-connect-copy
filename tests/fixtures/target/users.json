@@ -1,0 +1,5 @@
+{
+  "Id": "22222222-aaaa-bbbb-cccc-111111111111",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/agent/22222222-aaaa-bbbb-cccc-111111111111",
+  "Username": "localadmin"
+}

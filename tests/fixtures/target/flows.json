@@ -1,0 +1,16 @@
+{
+  "Id": "22222222-5555-6666-7777-aaaaaaaaaaaa",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/contact-flow/22222222-5555-6666-7777-aaaaaaaaaaaa",
+  "Name": "Default agent hold",
+  "ContactFlowType": "AGENT_HOLD",
+  "ContactFlowState": "ACTIVE",
+  "ContactFlowStatus": "PUBLISHED"
+}
+{
+  "Id": "22222222-5555-6666-7777-bbbbbbbbbbbb",
+  "Arn": "arn:aws:connect:us-west-2:222222222222:instance/ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb/contact-flow/22222222-5555-6666-7777-bbbbbbbbbbbb",
+  "Name": "Default customer queue",
+  "ContactFlowType": "CUSTOMER_QUEUE",
+  "ContactFlowState": "ACTIVE",
+  "ContactFlowStatus": "PUBLISHED"
+}

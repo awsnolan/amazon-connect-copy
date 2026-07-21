@@ -1,0 +1,6 @@
+{
+  "SecurityProfileId": "22222222-4444-5555-6666-bbbbbbbbbbbb",
+  "OrganizationResourceId": "ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb",
+  "SecurityProfileName": "Agent",
+  "Description": "Agent access"
+}
