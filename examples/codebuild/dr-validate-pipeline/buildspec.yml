@@ -1,0 +1,182 @@
+version: 0.2
+
+# Amazon Connect DR Validation Pipeline
+#
+# Runs daily to confirm the DR instance matches the source backup.
+# Publishes a CloudWatch metric and sends SNS notification on failure.
+#
+# Flow:
+#   1. Back up source instance (fresh snapshot)
+#   2. Validate DR instance against fresh backup
+#   3. Publish CloudWatch custom metric (1 = PASS, 0 = FAIL)
+#   4. Store validation result in S3 (audit trail)
+#   5. On FAIL: publish SNS alert with failure details
+#
+# Prerequisites:
+#   - CodeBuild service role has Connect read permissions on source + target
+#   - CodeBuild service role has cloudwatch:PutMetricData, sns:Publish, s3:PutObject
+#   - Source and target instances are ACTIVE
+#   - Environment variables configured (see below)
+
+env:
+  variables:
+    LANG: "en_GB.UTF-8"
+
+    # Source instance alias (the production instance to back up)
+    SOURCE_INSTANCE: ""
+
+    # Source AWS profile (leave empty for CodeBuild's default role)
+    SOURCE_PROFILE: ""
+
+    # Target instance ID (the DR warm-standby instance)
+    TARGET_INSTANCE: ""
+
+    # Target AWS profile (if cross-account; leave empty for same-account)
+    TARGET_PROFILE: ""
+
+    # S3 bucket for storing backups and validation results
+    S3_BUCKET: ""
+
+    # SNS topic ARN for failure alerts (leave empty to skip alerting)
+    SNS_TOPIC_ARN: ""
+
+    # CloudWatch namespace and metric name
+    CW_NAMESPACE: "ConnectDR"
+    CW_METRIC_NAME: "ValidationResult"
+
+    # Lambda/Lex prefix remapping (if different between accounts)
+    LAMBDA_PREFIX_A: ""
+    LAMBDA_PREFIX_B: ""
+
+phases:
+  install:
+    commands:
+      - jq --version
+      - aws --version
+      - echo "DR Validation Pipeline — $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  pre_build:
+    commands:
+      # Build flag strings
+      - |
+        SOURCE_FLAG=""
+        [ -n "$SOURCE_PROFILE" ] && SOURCE_FLAG="-p $SOURCE_PROFILE"
+        TARGET_FLAG=""
+        [ -n "$TARGET_PROFILE" ] && TARGET_FLAG="--target-profile $TARGET_PROFILE"
+        PLAN_ARGS=""
+        [ -n "$LAMBDA_PREFIX_A" ] && PLAN_ARGS="-l ${LAMBDA_PREFIX_A}=${LAMBDA_PREFIX_B}"
+
+      # Fresh backup of source instance
+      - |
+        echo "━━━ Backing up source instance ━━━"
+        bin/connect_backup -f -e $SOURCE_FLAG "$SOURCE_INSTANCE"
+
+      # Upload backup to S3 with date stamp
+      - |
+        DATESTAMP=$(date -u +%Y-%m-%d)
+        if [ -n "$S3_BUCKET" ]; then
+          echo "Uploading backup to s3://$S3_BUCKET/backups/$DATESTAMP/"
+          aws s3 sync "$SOURCE_INSTANCE/" "s3://$S3_BUCKET/backups/$DATESTAMP/" --quiet
+          aws s3 sync "$SOURCE_INSTANCE/" "s3://$S3_BUCKET/backups/latest/" --delete --quiet
+        fi
+
+  build:
+    commands:
+      # Preflight check
+      - |
+        echo "━━━ Preflight check ━━━"
+        bin/connect_validate -m preflight --target "$TARGET_INSTANCE" $TARGET_FLAG "$SOURCE_INSTANCE"
+
+      # Full validation (JSON output for parsing)
+      - |
+        echo "━━━ Full validation ━━━"
+        bin/connect_validate -m full -j --target "$TARGET_INSTANCE" $TARGET_FLAG "$SOURCE_INSTANCE" \
+          > validation.json 2>/dev/null || true
+
+      # Human-readable output for build logs
+      - |
+        bin/connect_validate -m full --no-color --target "$TARGET_INSTANCE" $TARGET_FLAG "$SOURCE_INSTANCE" || true
+
+      # Extract result
+      - |
+        RESULT=$(jq -r '.result // "UNKNOWN"' validation.json 2>/dev/null)
+        PASS_COUNT=$(jq -r '.summary.pass // 0' validation.json 2>/dev/null)
+        FAIL_COUNT=$(jq -r '.summary.fail // 0' validation.json 2>/dev/null)
+        TOTAL_COUNT=$(jq -r '.summary.total // 0' validation.json 2>/dev/null)
+        echo "Result: $RESULT ($PASS_COUNT passed, $FAIL_COUNT failed, $TOTAL_COUNT total)"
+        echo "$RESULT" > result.txt
+
+  post_build:
+    commands:
+      # Read result
+      - RESULT=$(cat result.txt)
+
+      # Publish CloudWatch metric (1 = PASS, 0 = FAIL)
+      - |
+        if [ "$RESULT" = "PASS" ] || [ "$RESULT" = "WARN" ]; then
+          METRIC_VALUE=1
+        else
+          METRIC_VALUE=0
+        fi
+        echo "Publishing CloudWatch metric: $CW_NAMESPACE/$CW_METRIC_NAME = $METRIC_VALUE"
+        aws cloudwatch put-metric-data \
+          --namespace "$CW_NAMESPACE" \
+          --metric-name "$CW_METRIC_NAME" \
+          --value "$METRIC_VALUE" \
+          --unit None \
+          --dimensions SourceInstance="$SOURCE_INSTANCE",TargetInstance="$TARGET_INSTANCE"
+
+      # Store validation result in S3
+      - |
+        DATESTAMP=$(date -u +%Y-%m-%d)
+        TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        if [ -n "$S3_BUCKET" ]; then
+          aws s3 cp validation.json "s3://$S3_BUCKET/validations/$DATESTAMP/validation.json" --quiet
+          aws s3 cp validation.json "s3://$S3_BUCKET/validations/latest.json" --quiet
+          echo "Validation result stored in S3"
+        fi
+
+      # On FAIL: send SNS alert
+      - |
+        if [ "$RESULT" != "PASS" ] && [ "$RESULT" != "WARN" ] && [ -n "$SNS_TOPIC_ARN" ]; then
+          FAILURES=$(jq -r '.failures[]? | "  [\(.id)] \(.label): \(.detail)"' validation.json 2>/dev/null)
+          aws sns publish \
+            --topic-arn "$SNS_TOPIC_ARN" \
+            --subject "DR Validation FAILED — $SOURCE_INSTANCE" \
+            --message "$(cat <<EOF
+DR Validation Failed
+====================
+Time:     $TIMESTAMP
+Source:   $SOURCE_INSTANCE
+Target:   $TARGET_INSTANCE
+Result:   $RESULT
+Passed:   $PASS_COUNT / $TOTAL_COUNT
+Failed:   $FAIL_COUNT
+
+Failures:
+$FAILURES
+
+Action required: investigate and remediate failures.
+Run: connect_validate -m full --target $TARGET_INSTANCE $SOURCE_INSTANCE
+EOF
+          )"
+          echo "SNS alert sent to $SNS_TOPIC_ARN"
+        elif [ "$RESULT" = "PASS" ] || [ "$RESULT" = "WARN" ]; then
+          echo "DR validation PASSED — no alert needed"
+        fi
+
+      # Exit with appropriate code
+      - |
+        if [ "$RESULT" = "PASS" ] || [ "$RESULT" = "WARN" ]; then
+          echo "Pipeline complete: DR instance validated successfully"
+          exit 0
+        else
+          echo "Pipeline complete: DR validation FAILED"
+          exit 1
+        fi
+
+artifacts:
+  files:
+    - validation.json
+    - result.txt
+  discard-paths: yes

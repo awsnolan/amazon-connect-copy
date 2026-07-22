@@ -1,0 +1,340 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Amazon Connect DR Validation Pipeline — deploys CodeBuild project with
+  EventBridge daily schedule, S3 backup bucket, SNS alerting, and CloudWatch
+  alarm for DR readiness monitoring.
+
+Parameters:
+  SourceInstance:
+    Type: String
+    Description: Alias of the production Connect instance to back up
+
+  TargetInstance:
+    Type: String
+    Description: Instance ID of the DR warm-standby Connect instance
+
+  SourceProfile:
+    Type: String
+    Default: ""
+    Description: AWS CLI profile for source instance (leave empty for CodeBuild role)
+
+  TargetProfile:
+    Type: String
+    Default: ""
+    Description: AWS CLI profile for target instance (leave empty for same-account)
+
+  ScheduleExpression:
+    Type: String
+    Default: "cron(0 6 * * ? *)"
+    Description: >
+      EventBridge schedule for validation runs. Default is daily at 06:00 UTC.
+      Use 'rate(1 day)' for simple daily, or cron for specific times.
+
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: Email address for DR failure alerts (leave empty to skip SNS subscription)
+
+  LambdaPrefixA:
+    Type: String
+    Default: ""
+    Description: Lambda function name prefix on source account (for cross-account remapping)
+
+  LambdaPrefixB:
+    Type: String
+    Default: ""
+    Description: Lambda function name prefix on target account (for cross-account remapping)
+
+  ToolkitRepoUrl:
+    Type: String
+    Default: "https://github.com/awsnolan/amazon-connect-copy.git"
+    Description: Git repository URL containing the DR toolkit scripts
+
+  ToolkitBranch:
+    Type: String
+    Default: "main"
+    Description: Branch to use from the toolkit repository
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Resources:
+
+  ##############################################
+  # S3 Bucket — stores backups and validation results
+  ##############################################
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "connect-dr-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: RetainDailyBackups7Days
+            Prefix: backups/
+            Status: Enabled
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 3
+          - Id: RetainValidationResults30Days
+            Prefix: validations/
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: connect-dr-pipeline
+        - Key: Environment
+          Value: dr
+
+  ##############################################
+  # SNS Topic — failure alerts
+  ##############################################
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: connect-dr-validation-alerts
+      Tags:
+        - Key: Project
+          Value: connect-dr-pipeline
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  ##############################################
+  # IAM Role — CodeBuild service role
+  ##############################################
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: connect-dr-validation-codebuild
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ConnectReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - connect:Describe*
+                  - connect:List*
+                  - connect:Search*
+                  - connect:GetContactAttributes
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lambda:GetFunction
+                  - lambda:GetPolicy
+                  - lambda:GetFunctionConfiguration
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - lex:DescribeBot
+                  - lex:DescribeBotAlias
+                  - lex:ListBots
+                  - lex:ListBotAliases
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - connectcases:ListDomains
+                  - connectcases:ListFields
+                  - connectcases:ListLayouts
+                  - connectcases:ListTemplates
+                Resource: "*"
+        - PolicyName: PipelineInfra
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt BackupBucket.Arn
+                  - !Sub "${BackupBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: ConnectDR
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref AlertTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  ##############################################
+  # CodeBuild Project
+  ##############################################
+
+  ValidationProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: connect-dr-validation
+      Description: Daily DR validation — backs up source, validates against target, publishes metrics
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      TimeoutInMinutes: 30
+      Source:
+        Type: GITHUB
+        Location: !Ref ToolkitRepoUrl
+        BuildSpec: examples/codebuild/dr-validate-pipeline/buildspec.yml
+        GitCloneDepth: 1
+        ReportBuildStatus: false
+      SourceVersion: !Ref ToolkitBranch
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: SOURCE_INSTANCE
+            Value: !Ref SourceInstance
+          - Name: SOURCE_PROFILE
+            Value: !Ref SourceProfile
+          - Name: TARGET_INSTANCE
+            Value: !Ref TargetInstance
+          - Name: TARGET_PROFILE
+            Value: !Ref TargetProfile
+          - Name: S3_BUCKET
+            Value: !Ref BackupBucket
+          - Name: SNS_TOPIC_ARN
+            Value: !Ref AlertTopic
+          - Name: CW_NAMESPACE
+            Value: ConnectDR
+          - Name: CW_METRIC_NAME
+            Value: ValidationResult
+          - Name: LAMBDA_PREFIX_A
+            Value: !Ref LambdaPrefixA
+          - Name: LAMBDA_PREFIX_B
+            Value: !Ref LambdaPrefixB
+      Artifacts:
+        Type: NO_ARTIFACTS
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: /connect-dr/validation
+      Tags:
+        - Key: Project
+          Value: connect-dr-pipeline
+
+  ##############################################
+  # EventBridge Rule — daily schedule
+  ##############################################
+
+  DailySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: connect-dr-daily-validation
+      Description: Triggers DR validation pipeline daily
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Id: CodeBuildTarget
+          Arn: !GetAtt ValidationProject.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: connect-dr-eventbridge-trigger
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartBuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codebuild:StartBuild
+                Resource: !GetAtt ValidationProject.Arn
+
+  ##############################################
+  # CloudWatch Alarm — alerts when DR is stale
+  ##############################################
+
+  DRReadinessAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: connect-dr-not-validated
+      AlarmDescription: >
+        DR instance has not passed validation in 36 hours.
+        This means either the pipeline failed to run or validation is failing.
+        Investigate immediately — DR failover may not be safe.
+      Namespace: ConnectDR
+      MetricName: ValidationResult
+      Dimensions:
+        - Name: SourceInstance
+          Value: !Ref SourceInstance
+        - Name: TargetInstance
+          Value: !Ref TargetInstance
+      Statistic: Minimum
+      Period: 86400
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref AlertTopic
+      OKActions:
+        - !Ref AlertTopic
+
+##############################################
+# Outputs
+##############################################
+
+Outputs:
+  BackupBucketName:
+    Description: S3 bucket for backups and validation results
+    Value: !Ref BackupBucket
+
+  AlertTopicArn:
+    Description: SNS topic for DR failure alerts
+    Value: !Ref AlertTopic
+
+  ProjectName:
+    Description: CodeBuild project name (for manual triggers)
+    Value: !Ref ValidationProject
+
+  DashboardMetric:
+    Description: CloudWatch metric for monitoring
+    Value: !Sub "${CW_NAMESPACE}/${CW_METRIC_NAME} [SourceInstance=${SourceInstance}, TargetInstance=${TargetInstance}]"
+
+  ManualTrigger:
+    Description: Command to trigger validation manually
+    Value: !Sub "aws codebuild start-build --project-name ${ValidationProject}"

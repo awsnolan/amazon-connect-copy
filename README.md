@@ -327,8 +327,6 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 ### Next
 
-- [ ] **CI/CD pipeline integration** — wire validate JSON output into automated DR
-  runbooks to gate DNS failover.
 - [ ] **Scheduled backup automation** — CodeBuild on a schedule with S3 storage and
   lifecycle retention. See [BACKLOG.md](./BACKLOG.md).
 
@@ -347,6 +345,10 @@ Please read [CONTRIBUTING.md](./CONTRIBUTING.md). PRs accepted on the *developme
 
 ### Done
 
+- [x] **CI/CD pipeline integration** — daily CodeBuild validation with CloudWatch
+  metric, SNS alerting on failure, S3 audit trail, and CloudWatch alarm for
+  staleness. CloudFormation one-click deploy. See
+  [examples/codebuild/dr-validate-pipeline/](./examples/codebuild/dr-validate-pipeline/).
 - [x] **User restore improvements** — `update-user-*` for pre-provisioned users,
   preflight username verification, skip missing users gracefully.
 - [x] **`--user-password-file` escape hatch** — for same-account restores where
