@@ -277,55 +277,224 @@ setup options including cross-account and Route 53 integration.
 
 ## Required IAM Permissions
 
-The restore profile needs these Connect actions:
+Three profiles with different permission sets. Use least-privilege — don't
+share a single admin role across all operations.
+
+### Backup profile (read-only)
+
+Used by `connect_backup`. Read-only access to the source instance.
 
 ```
-connect:AssociateBot
-connect:AssociateLambdaFunction
-connect:AssociateLexBot
-connect:AssociateQueueQuickConnects
-connect:AssociateRoutingProfileQueues
-connect:CreateContactFlow
-connect:CreateContactFlowModule
-connect:CreateHoursOfOperation
-connect:CreateQueue
-connect:CreateQuickConnect
-connect:CreateRoutingProfile
-connect:DeleteContactFlow
-connect:DeleteContactFlowModule
-connect:DeleteHoursOfOperation
-connect:DeleteQuickConnect
+# Amazon Connect
 connect:DescribeContactFlow
 connect:DescribeContactFlowModule
+connect:DescribeAgentStatus
+connect:DescribeAttachmentConfiguration
+connect:DescribeAuthenticationProfile
+connect:DescribeDataTable
+connect:DescribeEmailAddress
+connect:DescribeEvaluationForm
 connect:DescribeHoursOfOperation
+connect:DescribeInstance
+connect:DescribeInstanceAttribute
+connect:DescribePhoneNumber
+connect:DescribePredefinedAttribute
+connect:DescribePrompt
 connect:DescribeQueue
 connect:DescribeQuickConnect
 connect:DescribeRoutingProfile
-connect:DisassociateRoutingProfileQueues
+connect:DescribeRule
+connect:DescribeSecurityProfile
+connect:DescribeUser
+connect:DescribeUserHierarchyGroup
+connect:DescribeUserHierarchyStructure
+connect:DescribeView
+connect:DescribeVocabulary
+connect:GetTaskTemplate
+connect:ListAgentStatuses
+connect:ListApprovedOrigins
+connect:ListAuthenticationProfiles
 connect:ListContactFlowModules
 connect:ListContactFlows
+connect:ListDataTablePrimaryValues
+connect:ListDataTableValues
+connect:ListDataTables
+connect:ListDefaultVocabularies
+connect:ListEvaluationForms
+connect:ListHoursOfOperationOverrides
 connect:ListHoursOfOperations
+connect:ListInstanceStorageConfigs
 connect:ListInstances
-connect:ListPhoneNumbers
+connect:ListIntegrationAssociations
+connect:ListLambdaFunctions
+connect:ListPhoneNumbersV2
+connect:ListPredefinedAttributes
 connect:ListPrompts
 connect:ListQueueQuickConnects
 connect:ListQueues
 connect:ListQuickConnects
 connect:ListRoutingProfileQueues
 connect:ListRoutingProfiles
+connect:ListRules
+connect:ListSecurityKeys
+connect:ListSecurityProfilePermissions
+connect:ListSecurityProfiles
+connect:ListTaskTemplates
+connect:ListUserHierarchyGroups
+connect:ListUserProficiencies
+connect:ListUsers
+connect:ListViews
+connect:SearchEmailAddresses
+
+# Lambda (for external dependencies manifest)
+lambda:GetFunction
+lambda:GetFunctionConfiguration
+lambda:GetPolicy
+
+# Lex V2 (for external dependencies manifest)
+lex:DescribeBot
+lex:DescribeBotAlias
+lex:ListBots
+lex:ListBotAliases
+
+# Lex Classic (if used)
+lex:GetBot
+
+# Cases (if enabled)
+connectcases:ListDomains
+connectcases:ListFields
+connectcases:ListLayouts
+connectcases:ListTemplates
+
+# Campaigns (if enabled)
+connect-campaigns-v2:ListCampaigns
+connect-campaigns-v2:DescribeCampaign
+```
+
+### Restore profile (write access to target)
+
+Used by `connect_restore`. Needs create/update access on the target instance.
+
+```
+# Amazon Connect — create
+connect:AssociateApprovedOrigin
+connect:AssociateBot
+connect:AssociateInstanceStorageConfig
+connect:AssociateLambdaFunction
+connect:AssociateLexBot
+connect:AssociatePhoneNumberContactFlow
+connect:AssociateQueueQuickConnects
+connect:AssociateRoutingProfileQueues
+connect:BatchCreateDataTableValue
+connect:CreateAgentStatus
+connect:CreateContactFlow
+connect:CreateContactFlowModule
+connect:CreateDataTable
+connect:CreateEvaluationForm
+connect:CreateHoursOfOperation
+connect:CreateHoursOfOperationOverride
+connect:CreatePredefinedAttribute
+connect:CreateQueue
+connect:CreateQuickConnect
+connect:CreateRoutingProfile
+connect:CreateRule
+connect:CreateSecurityProfile
+connect:CreateTaskTemplate
+connect:CreateUser
+connect:CreateUserHierarchyGroup
+connect:CreateView
+connect:CreateVocabulary
+
+# Amazon Connect — update
+connect:ActivateEvaluationForm
+connect:DisassociateRoutingProfileQueues
+connect:UpdateAgentStatus
+connect:UpdateAuthenticationProfile
 connect:UpdateContactFlowContent
+connect:UpdateContactFlowMetadata
 connect:UpdateContactFlowModuleContent
+connect:UpdateContactFlowModuleMetadata
 connect:UpdateHoursOfOperation
+connect:UpdateInstanceAttribute
+connect:UpdateInstanceStorageConfig
+connect:UpdatePredefinedAttribute
 connect:UpdateQueueHoursOfOperation
 connect:UpdateQueueOutboundCallerConfig
 connect:UpdateQuickConnectConfig
 connect:UpdateRoutingProfileConcurrency
 connect:UpdateRoutingProfileDefaultOutboundQueue
+connect:UpdateRule
+connect:UpdateTaskTemplate
+connect:UpdateUserHierarchy
+connect:UpdateUserHierarchyStructure
+connect:UpdateUserRoutingProfile
+connect:UpdateUserSecurityProfiles
+connect:UpdateViewContent
+
+# Amazon Connect — read (needed during restore for ID resolution)
+connect:DescribeContactFlow
+connect:DescribeContactFlowModule
+connect:DescribeEvaluationForm
+connect:DescribeHoursOfOperation
+connect:DescribeInstance
+connect:DescribePredefinedAttribute
+connect:DescribeQueue
+connect:DescribeQuickConnect
+connect:DescribeRoutingProfile
+connect:DescribeRule
+connect:DescribeSecurityProfile
+connect:DescribeView
+connect:DescribeVocabulary
+connect:GetTaskTemplate
+connect:ListContactFlowModules
+connect:ListContactFlows
+connect:ListHoursOfOperations
+connect:ListInstanceStorageConfigs
+connect:ListLambdaFunctions
+connect:ListLexBots
+connect:ListQueues
+connect:ListRoutingProfileQueues
+connect:ListRoutingProfiles
+connect:ListUsers
 ```
 
-The validate profile needs read-only access: `connect:Describe*`, `connect:List*`,
-`connect:Search*`, plus `lambda:GetFunction`, `lambda:GetPolicy`,
-`lex:DescribeBot`, `lex:DescribeBotAlias`.
+### Validate profile (read-only, source + target)
+
+Used by `connect_validate`. Read-only access to both instances.
+
+```
+# Amazon Connect
+connect:Describe*
+connect:List*
+connect:Search*
+connect:GetTaskTemplate
+
+# Smoke tests only (Layer 18 — optional, omit if not using -m smoke)
+connect:StartChatContact
+connect:StartOutboundVoiceContact
+connect:StopContact
+connect:TestContactFlow
+
+# Lambda
+lambda:GetFunction
+lambda:GetFunctionConfiguration
+lambda:GetPolicy
+
+# Lex V2
+lex:DescribeBot
+lex:DescribeBotAlias
+lex:ListBots
+lex:ListBotAliases
+
+# Lex Classic
+lex:GetBot
+
+# Cases
+connectcases:ListDomains
+connectcases:ListFields
+connectcases:ListLayouts
+connectcases:ListTemplates
+```
 
 ## Legacy Name Aliases
 
