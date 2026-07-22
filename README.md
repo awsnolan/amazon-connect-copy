@@ -90,41 +90,47 @@ connect_validate -m full --target <target-instance-id> source-instance
 IDs and ARNs are re-mapped automatically during restore. Resources are classified
 by what the toolkit can fully automate versus what requires manual setup.
 
+> **Important:** This toolkit restores *configuration* — the structure needed to
+> operate going forward. It does not transfer historical operational data (past
+> call recordings, evaluation scores, case records, CTRs, or analytics). The DR
+> instance starts fresh for reporting purposes. Historical data remains accessible
+> in the source account's S3 buckets and Connect analytics.
+
 ### Backed up and restored (automated)
 
-| Resource | Restore behaviour |
-|----------|-------------------|
-| Instance attributes | Updated on target |
-| Storage configs | Associated on target (pointing to original S3 buckets) |
-| Hours of operations + overrides | Created/updated |
-| Queues (STANDARD) + quick connect associations | Created/updated |
-| Routing profiles + queue associations | Created/updated |
-| Security profiles + permissions | New profiles created; updates flagged for manual review |
-| User hierarchy structure + groups | Created |
-| User configs (routing/security/hierarchy) | Updated on pre-existing users |
-| Quick connects | Created/updated |
-| Contact flow modules | Created/updated with ID remapping |
-| Contact flows | Created/updated with ID remapping |
-| Agent statuses | Created/updated |
-| Predefined attributes | Created/updated (system-managed skipped) |
-| Task templates | Created/updated |
-| Evaluation forms | Created; updates flagged for manual review |
-| Rules (Contact Lens, automation) | Created/updated |
-| Views (agent workspace) | Created/updated |
-| Vocabularies (Contact Lens) | Created on target |
-| Data tables (structure + row data) | Created with full content |
-| Phone number → flow mapping | Associated if number pre-claimed on target |
-| Lambda function associations | Associated |
-| Lex V2 bot associations | Associated |
+| Resource | Restore behaviour | Historical data |
+|----------|-------------------|-----------------|
+| Instance attributes | Updated on target | — |
+| Storage configs | Associated on target (pointing to original S3 buckets) | Recordings/transcripts stay in source S3 |
+| Hours of operations + overrides | Created/updated | — |
+| Queues (STANDARD) + quick connect associations | Created/updated | — |
+| Routing profiles + queue associations | Created/updated | — |
+| Security profiles + permissions | New profiles created; updates flagged for manual review | — |
+| User hierarchy structure + groups | Created | — |
+| User configs (routing/security/hierarchy) | Updated on pre-existing users | — |
+| Quick connects | Created/updated | — |
+| Contact flow modules | Created/updated with ID remapping | — |
+| Contact flows | Created/updated with ID remapping | — |
+| Agent statuses | Created/updated | — |
+| Predefined attributes | Created/updated (system-managed skipped) | — |
+| Task templates | Created/updated | — |
+| Evaluation forms | Created; updates flagged for manual review | Past evaluations (scores) not transferred |
+| Rules (Contact Lens, automation) | Created/updated | Rule execution history not transferred |
+| Views (agent workspace) | Created/updated | — |
+| Vocabularies (Contact Lens) | Created on target | — |
+| Data tables (structure + row data) | Created with full content | — |
+| Phone number → flow mapping | Associated if number pre-claimed on target | — |
+| Lambda function associations | Associated | — |
+| Lex V2 bot associations | Associated | — |
 
 ### Backed up only (reference for validation and manual setup)
 
-| Resource | Why not automated |
-|----------|-------------------|
-| Cases (domains, fields, layouts, templates) | Restore automation planned; currently operator must recreate |
-| Outbound campaigns | Requires End User Messaging + recipient source configuration |
-| Email addresses | Requires SES domain verification (days, not minutes) |
-| External dependencies manifest | Informational; Lambda/Lex deployed via `connect_deps_restore` |
+| Resource | Why not automated | Note |
+|----------|-------------------|------|
+| Cases (domains, fields, layouts, templates) | Config only; case records not portable | Agents take notes during DR, file cases on failback |
+| Outbound campaigns | Requires End User Messaging + recipient source | Campaign call history not transferable |
+| Email addresses | Requires SES domain verification (days, not minutes) | Email threads stay on source |
+| External dependencies manifest | Informational; Lambda/Lex deployed via `connect_deps_restore` | — |
 
 ## Prerequisites
 
