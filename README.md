@@ -280,6 +280,9 @@ setup options including cross-account and Route 53 integration.
 Three profiles with different permission sets. Use least-privilege — don't
 share a single admin role across all operations.
 
+For a ready-to-deploy IAM policy, see the CodeBuildRole in
+[`examples/codebuild/dr-validate-pipeline/template.yaml`](./examples/codebuild/dr-validate-pipeline/template.yaml).
+
 ### Backup profile (read-only)
 
 Used by `connect_backup`. Read-only access to the source instance.
