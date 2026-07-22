@@ -244,6 +244,27 @@ See [DR_VALIDATION_SPEC.md](./DR_VALIDATION_SPEC.md) for the full specification
 of what "restored and ready for traffic" means — 18 validation layers covering
 every resource type.
 
+## Continuous DR Validation
+
+Once your target instance exists and the initial restore has run (core telephony
+configured but not serving live traffic), keep it validated daily:
+
+```bash
+cd examples/codebuild/dr-validate-pipeline
+./deploy.sh <source-alias> <dr-instance-id> --email oncall@example.com
+```
+
+This deploys a CodeBuild pipeline that:
+- Backs up production daily and stores in S3 (7-day retention)
+- Validates the DR instance against the fresh backup (18-layer check)
+- Publishes a CloudWatch metric (1 = ready, 0 = drift detected)
+- Alerts via SNS when validation fails
+- Alarms if no successful validation in 36 hours
+
+Idle cost: ~$3-5/month. See
+[pipeline documentation](./examples/codebuild/dr-validate-pipeline/) for full
+setup options including cross-account and Route 53 integration.
+
 ## Useful Tips
 
 - Do not reuse the target instance directory or helper directory between runs.
