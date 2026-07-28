@@ -263,7 +263,29 @@ else
 
         cat "$instance_alias_dir_a/$module_json" > $TEMPA
         cat "$instance_alias_dir_b/$module_json" > $TEMPB
-        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        df=$(diff_files); echo -n "$df"
+
+        # Even if content is same, check if description needs updating
+        if [ "$df" == "same" ]; then
+            live_mod_desc=$(aws_connect describe-contact-flow-module \
+                --instance-id $instance_id_b \
+                --contact-flow-module-id $module_id_b 2>/dev/null | jq -r '.ContactFlowModule.Description // empty' | dos2unix)
+            if [ -n "$module_desc" ] && [ "$module_desc" != "$live_mod_desc" ] && [ "$module_desc" != "$module_name_decoded" ]; then
+                echo " (updating description)"
+                if [ -n "$dryrun" ]; then
+                    echo "  [dry] Would update description for $module_name_decoded"
+                else
+                    aws_connect update-contact-flow-module-metadata \
+                        --instance-id $instance_id_b \
+                        --contact-flow-module-id $module_id_b \
+                        --description "${module_desc//\"/\\\"}" 2>/dev/null || true
+                fi
+            else
+                echo ""
+            fi
+            continue
+        fi
+        echo ""
 
         cat "$instance_alias_dir_a/$module_json" |
         sed -f "$helper_sed" |
@@ -363,7 +385,29 @@ else
 
         cat "$instance_alias_dir_a/$flow_json" > $TEMPA
         cat "$instance_alias_dir_b/$flow_json" > $TEMPB
-        df=$(diff_files); echo $df; test "$df" == "same" && continue
+        df=$(diff_files); echo -n "$df"
+
+        # Even if content is same, check if description needs updating
+        if [ "$df" == "same" ]; then
+            live_desc=$(aws_connect describe-contact-flow \
+                --instance-id $instance_id_b \
+                --contact-flow-id $flow_id_b 2>/dev/null | jq -r '.ContactFlow.Description // empty' | dos2unix)
+            if [ -n "$flow_desc" ] && [ "$flow_desc" != "$live_desc" ] && [ "$flow_desc" != "$flow_name_decoded" ]; then
+                echo " (updating description)"
+                if [ -n "$dryrun" ]; then
+                    echo "  [dry] Would update description for $flow_name_decoded"
+                else
+                    aws_connect update-contact-flow-metadata \
+                        --instance-id $instance_id_b \
+                        --contact-flow-id $flow_id_b \
+                        --description "${flow_desc//\"/\\\"}" 2>/dev/null || true
+                fi
+            else
+                echo ""
+            fi
+            continue
+        fi
+        echo ""
 
         cat "$instance_alias_dir_a/$flow_json" |
         sed -f "$helper_sed" |
