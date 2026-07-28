@@ -113,24 +113,11 @@ fi
 
 ############################################################
 #
-# Connect Cases
+# Connect Cases — now automated in Supporting Resources section
 #
 
-cat <<EOD
-
-Connect Cases
--------------
-EOD
-if [ -s "$instance_alias_dir_a/cases_domains.json" ]; then
-    jq -r ".domainId + \" \" + .name" "$instance_alias_dir_a/cases_domains.json" 2>/dev/null |
-    dos2unix |
-    while read domain_id domain_name; do
-        echo "  Cases domain: $domain_name"
-        manual_action "Cases" "Recreate Cases domain '$domain_name' on target. Source: $instance_alias_dir_a/cases_domains.json"
-    done
-else
-    echo "No Connect Cases domains to process"
-fi
+echo ""
+echo "Connect Cases: handled in Supporting Resources section"
 
 
 ############################################################
