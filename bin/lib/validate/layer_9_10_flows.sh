@@ -61,7 +61,7 @@ validate_layer_9_10() {
                 local mod_saved_file="$instance_alias_dir/module_$mod_name_enc.json"
                 if [ -f "$mod_saved_file" ]; then
                     local saved_mod_desc live_mod_desc
-                    saved_mod_desc=$(jq -r '.Description // empty' "$mod_saved_file" 2>/dev/null | dos2unix)
+                    saved_mod_desc=$(jq -r "select(.Name == \"${mod_name//\"/\\\"}\") | .Description // empty" "$instance_alias_dir/modules.json" 2>/dev/null | dos2unix)
                     live_mod_desc=$(echo "$live_mod" | jq -r '.ContactFlowModule.Description // empty' | dos2unix)
                     if compare_description "$saved_mod_desc" "$live_mod_desc"; then
                         mod_desc_pass=$((mod_desc_pass + 1))
@@ -284,7 +284,8 @@ validate_layer_9_10() {
         local flow_saved_file="$instance_alias_dir/flow_$flow_name_enc.json"
         if [ -f "$flow_saved_file" ]; then
             local saved_flow_desc live_flow_desc
-            saved_flow_desc=$(jq -r '.Description // empty' "$flow_saved_file" 2>/dev/null | dos2unix)
+            # Description is stored in the manifest (flows.json), not the content file
+            saved_flow_desc=$(jq -r "select(.Name == \"${flow_name//\"/\\\"}\") | .Description // empty" "$instance_alias_dir/flows.json" 2>/dev/null | dos2unix)
             live_flow_desc=$(echo "$live_flow" | jq -r '.ContactFlow.Description // empty' | dos2unix)
             if compare_description "$saved_flow_desc" "$live_flow_desc"; then
                 flow_desc_pass=$((flow_desc_pass + 1))
