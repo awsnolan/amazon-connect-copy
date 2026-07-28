@@ -112,3 +112,48 @@ dropdown option lists) into the terminal output. Unreadable and noisy.
 **Scope:**
 - In dry-run mode, show only: view name, "changed", content size
 - Full content available in helper.log for debugging, not stdout
+
+---
+
+## Cases & Customer Profiles Config Restore Automation
+
+**Problem:** Cases and Customer Profiles config (schemas, field definitions,
+object types, layouts, templates, calculated attributes) are backed up but
+restore is manual. Operators must recreate domain structures by hand on the DR
+instance.
+
+**What's in scope (config only):**
+
+| Feature | Config to restore |
+|---------|-------------------|
+| Cases | CreateDomain → BatchCreateField → CreateLayout → CreateTemplate (with ID remapping) |
+| Customer Profiles | CreateDomain → PutProfileObjectType → CreateCalculatedAttributeDefinition |
+
+**What's permanently out of scope (data):**
+- Case records (individual cases filed by agents)
+- Profile records (customer data, merged profiles, interaction history)
+- Identity resolution ML state (instance-specific merge graphs)
+
+**Rationale for excluding data:**
+- Volume: millions of records, not a "minutes to failover" operation
+- Freshness: stale immediately after backup
+- Source of truth is elsewhere: profiles come from CRM via AppFlow, cases resume on failback
+- Design principle: toolkit optimises for RTO, not data completeness
+
+**Operational expectation during DR:**
+- Cases: agents take notes, file cases on failback
+- Customer Profiles: flows reference profiles via error paths; data re-ingests
+  once AppFlow integrations are reconnected on DR instance
+
+**Implementation:**
+1. Add Customer Profiles backup (ListDomains, GetDomain, ListProfileObjectTypes,
+   GetProfileObjectType, ListCalculatedAttributes, GetCalculatedAttributeDefinition)
+2. Add Cases + Customer Profiles config restore logic
+3. Update README/DR_OPERATOR_GUIDE with Customer Profiles in feature tables
+4. Add validation layer (domain exists, object types match, calculated attributes match)
+5. Add profile:* permissions to backup IAM profile
+
+**Note:** External integrations (AppFlow OAuth connections) require manual
+reconnection even with config automation — OAuth tokens are not portable.
+
+See `.kiro/steering/customer-profiles-decision.md` for full rationale.
