@@ -10,7 +10,7 @@
 ############################################################
 
 echo ""
-section_header "External Systems & Flows"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "External Systems & Flows" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # Amazon Connect Cases (skip if feature not enabled)

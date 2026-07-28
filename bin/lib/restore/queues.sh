@@ -3,7 +3,7 @@
 # Queues
 #
 
-section_header "Queues"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Queues" $RESTORE_STEP $RESTORE_TOTAL
 # Preload as $helper_old may change
 egrep "^queue_" "$helper_old" > $TEMPOLD
 # Create what is in $helper_new

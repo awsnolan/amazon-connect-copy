@@ -8,7 +8,7 @@
 # such that references can be resolved in updates
 #
 
-section_header "Contact Flows & Modules"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Contact Flows & Modules" $RESTORE_STEP $RESTORE_TOTAL
 
 # Preload as $helper_old may change
 # Use TEMPMOD instead of TEMPOLD to carry over to module update

@@ -3,7 +3,7 @@
 # Instance Attributes (feature flags)
 #
 
-section_header "Instance Foundation"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Instance Foundation" $RESTORE_STEP $RESTORE_TOTAL
 if [ -f "$instance_alias_dir_a/instance_attributes.json" ]; then
     echo "Applying instance attributes from source to target"
     # Each line in the file is a separate JSON object with Attribute.AttributeType and Attribute.Value

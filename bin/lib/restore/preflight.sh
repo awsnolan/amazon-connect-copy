@@ -3,7 +3,7 @@
 # Pre-flight: Target Instance Reachability
 #
 
-section_header "Pre-flight: Target Instance"
+RESTORE_STEP=$((RESTORE_STEP + 1)); RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Pre-flight: Target Instance" $RESTORE_STEP $RESTORE_TOTAL $RESTORE_STEP $RESTORE_TOTAL
 
 instance_id_b=$(jq -r '.Id // empty' "$instance_alias_dir_b/instance.json" 2>/dev/null | tr -d '\r')
 if [ -z "$instance_id_b" ]; then

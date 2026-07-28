@@ -299,6 +299,31 @@ run_section() {
 ###############################################################################
 
 section_header() {
+    # Usage: section_header "Title" [step_num total_steps]
+    local title="$1"
+    local step_info=""
+    if [ -n "${2:-}" ] && [ -n "${3:-}" ]; then
+        step_info="$2/$3 "
+    fi
     echo ""
-    echo -e "${C_BOLD}━━━ $1 ━━━ $(ts)${C_RESET}"
+    echo -e "${C_BOLD}━━━ ${step_info}${title} ━━━ $(ts)${C_RESET}"
+}
+
+###############################################################################
+# Completion summary
+###############################################################################
+
+print_completion_summary() {
+    # Usage: print_completion_summary "Script Name" start_time [extra_info]
+    local script_name="$1"
+    local start="$2"
+    local extra="${3:-}"
+    local end=$(date +%s)
+    local duration=$((end - start))
+    echo ""
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    echo -e "  ${C_PASS}✓ ${script_name} complete${C_RESET}"
+    [ -n "$extra" ] && echo "  $extra"
+    echo "  Duration: ${duration}s"
+    echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
 }

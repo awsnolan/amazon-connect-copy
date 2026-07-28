@@ -3,7 +3,7 @@
 # Task Templates
 #
 
-section_header "Supporting Resources"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Supporting Resources" $RESTORE_STEP $RESTORE_TOTAL
 egrep "^tasktemplate_" "$helper_old" > $TEMPOLD
 egrep "^tasktemplate_" "$helper_new" > $TEMPNEW
 if [ ! -s $TEMPNEW ]; then

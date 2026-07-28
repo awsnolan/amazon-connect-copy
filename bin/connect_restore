@@ -235,6 +235,10 @@ fi
 # Run sections in dependency order
 ############################################################
 
+RESTORE_START=$(date +%s)
+RESTORE_TOTAL=9
+RESTORE_STEP=0
+
 run_section "preflight"   "$LIB_DIR/restore/preflight.sh"
 run_section "instance"    "$LIB_DIR/restore/instance.sh"
 run_section "hours"       "$LIB_DIR/restore/hours.sh"

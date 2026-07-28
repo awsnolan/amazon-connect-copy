@@ -71,6 +71,7 @@ for ext in var sed new old; do eval helper_$ext=$helper/helper.$ext; > $helper/h
 . "$LIB_DIR/plan/instance.sh"
 
 # Plan sections
+PLAN_START=$(date +%s)
 run_section "prompts"        "$LIB_DIR/plan/prompts.sh"
 run_section "hours"          "$LIB_DIR/plan/hours.sh"
 run_section "queues"         "$LIB_DIR/plan/queues.sh"
@@ -83,9 +84,9 @@ run_section "lex_bots"       "$LIB_DIR/plan/lex_bots.sh"
 run_section "supporting"     "$LIB_DIR/plan/supporting.sh"
 run_section "users"          "$LIB_DIR/plan/users.sh"
 
-cat <<EOD
+new_count=$(wc -l < "$helper_new" 2>/dev/null | tr -d ' ')
+old_count=$(wc -l < "$helper_old" 2>/dev/null | tr -d ' ')
+sed_count=$(grep -c "^s%" "$helper_sed" 2>/dev/null || echo 0)
 
-Helper files created in: $helper/
-  helper.var, helper.new, helper.old, helper.sed
-All done
-EOD
+print_completion_summary "Plan" "$PLAN_START" "To create: $new_count | To update: $old_count | ID mappings: $sed_count
+  Helper: $helper/"

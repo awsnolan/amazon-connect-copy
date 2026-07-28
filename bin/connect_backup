@@ -165,6 +165,10 @@ echo "instance_contact_flow_prefix=\"$contact_flow_prefix\"" >> "$instance_alias
 # Run sections
 ############################################################
 
+BACKUP_START=$(date +%s)
+BACKUP_TOTAL=7
+BACKUP_STEP=0
+
 run_section "instance"    "$LIB_DIR/backup/instance.sh"
 run_section "users"       "$LIB_DIR/backup/users.sh"
 run_section "routing"     "$LIB_DIR/backup/routing.sh"
@@ -173,5 +177,5 @@ run_section "supporting"  "$LIB_DIR/backup/supporting.sh"
 run_section "channels"    "$LIB_DIR/backup/channels.sh"
 run_section "external"    "$LIB_DIR/backup/external.sh"
 
-echo
-echo "All done"
+file_count=$(find "$instance_alias_dir" -type f | wc -l | tr -d ' ')
+print_completion_summary "Backup" "$BACKUP_START" "Output: $instance_alias_dir/ ($file_count files)"

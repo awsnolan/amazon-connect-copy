@@ -30,7 +30,7 @@ gen_helper_routing_new() {
     echo "$out_file"
 }
 
-section_header "Routing Profiles"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Routing Profiles" $RESTORE_STEP $RESTORE_TOTAL
 # Preload as $helper_old may change
 egrep "^routing_" "$helper_old" > $TEMPOLD
 # Create what is in $helper_new

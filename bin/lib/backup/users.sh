@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-section_header "Users & Hierarchy"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "Users & Hierarchy" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # User Hierarchy Groups

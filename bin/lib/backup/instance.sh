@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-section_header "Instance Foundation"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "Instance Foundation" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # Instance Attributes (feature flags)

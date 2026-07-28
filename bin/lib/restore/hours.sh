@@ -3,7 +3,7 @@
 # Queue → Quick Connect Associations
 #
 
-section_header "Hours & Queue Associations"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Hours & Queue Associations" $RESTORE_STEP $RESTORE_TOTAL
 if [ -s "$instance_alias_dir_a/queues.json" ]; then
     jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/queues.json" |
     dos2unix |

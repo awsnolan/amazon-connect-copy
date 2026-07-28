@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-section_header "Features & Access"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "Features & Access" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # Quick Connects

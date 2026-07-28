@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-section_header "Channels & Phone Numbers"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "Channels & Phone Numbers" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # Email Addresses (skip if feature not enabled)

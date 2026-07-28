@@ -3,7 +3,7 @@
 # Phone Number → Contact Flow Associations
 #
 
-section_header "Channels & Phone Numbers"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Channels & Phone Numbers" $RESTORE_STEP $RESTORE_TOTAL
 if [ -s "$instance_alias_dir_a/phonenumbers.json" ]; then
     jq -r ".PhoneNumberId + \" \" + .PhoneNumber" "$instance_alias_dir_a/phonenumbers.json" |
     dos2unix |

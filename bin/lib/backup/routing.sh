@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-section_header "Routing Infrastructure"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "Routing Infrastructure" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # Prompts

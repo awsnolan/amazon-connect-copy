@@ -3,7 +3,7 @@
 # Quick Connects
 #
 
-section_header "Quick Connects & Features"
+RESTORE_STEP=$((RESTORE_STEP + 1)); section_header "Quick Connects & Features" $RESTORE_STEP $RESTORE_TOTAL
 # Preload as $helper_old may change
 egrep "^quickconnect_" "$helper_old" > $TEMPOLD
 # Create what is in $helper_new

@@ -8,7 +8,7 @@
 ############################################################
 
 echo ""
-section_header "Supporting Resources"
+BACKUP_STEP=$((BACKUP_STEP + 1)); section_header "Supporting Resources" $BACKUP_STEP $BACKUP_TOTAL
 
 ############################################################
 # Task Templates
