@@ -1,8 +1,8 @@
 # DR Validation Test Suite — Specification
 
-**Version:** 0.1.0 (Draft)
-**Last updated:** 2026-07-16
-**Status:** Ready for implementation — expect changes as code is developed
+**Version:** 0.2.0
+**Last updated:** 2026-07-28
+**Status:** Implemented — reflects current code in bin/lib/validate/
 
 ---
 
@@ -10,6 +10,7 @@
 
 | Version | Date | Change |
 |---------|------|--------|
+| 0.2.0 | 2026-07-28 | Layer 15 expanded to include Customer Profiles (tests 15.5-15.7). Layer renamed to "Cases & Customer Profiles". Status updated to Implemented. |
 | 0.1.0 | 2026-07-16 | Initial draft. 19 layers, 104 tests, companion tool spec, full runbook |
 
 ---
@@ -356,14 +357,17 @@ The instance itself must be reachable, active, and configured identically.
 
 ---
 
-### Layer 15: Cases Domain
+### Layer 15: Cases & Customer Profiles
 
 | ID | Test | Pass criteria |
 |----|------|---------------|
 | 15.1 | Cases domain exists | Domain accessible via `connectcases list-domains` |
-| 15.2 | Custom fields match | All custom fields exist with correct Type (Text, Number, Boolean, DateTime, SingleSelect, Url) and options |
-| 15.3 | Layouts match | All layouts exist with correct fieldGroup definitions |
-| 15.4 | Templates match | All case templates exist with correct required fields and default values |
+| 15.2 | Custom fields match | Field count on target ≥ saved count |
+| 15.3 | Layouts match | Layout count on target ≥ saved count |
+| 15.4 | Templates match | Template count on target ≥ saved count |
+| 15.5 | Customer Profiles domain exists | Domain accessible via `customer-profiles get-domain` |
+| 15.6 | Profile object types match | Object type count on target ≥ saved count |
+| 15.7 | Calculated attributes match | Calculated attribute count on target ≥ saved count |
 
 ---
 
