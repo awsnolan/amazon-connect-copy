@@ -80,10 +80,10 @@ print_remediation() {
         7)
             echo ""
             echo -e "  ${C_BOLD}Layer 7: Users${C_RESET}"
-            echo "    • CRITICAL: Users cannot be fully restored by script (password/IdP link unavailable)"
+            echo "    • User creation requires a password or IdP link — neither available from backup"
             echo "    • Pre-create users via Identity Center (SSO) or Connect console"
             echo "    • Ensure Username matches exactly (case-sensitive)"
-            echo "    • After creation: verify RoutingProfile and SecurityProfile assignments"
+            echo "    • After creation: the restore script updates RoutingProfile and SecurityProfile assignments"
             echo "    → https://docs.aws.amazon.com/connect/latest/adminguide/user-management.html"
             echo "    → See DR_OPERATOR_GUIDE.md for user provisioning checklist"
             ;;
@@ -112,11 +112,11 @@ print_remediation() {
         11)
             echo ""
             echo -e "  ${C_BOLD}Layer 11: Phone Numbers${C_RESET}"
-            echo "    • CRITICAL: Phone numbers cannot be restored by script"
-            echo "    • Claim new numbers in target instance via console or ClaimPhoneNumber API"
+            echo "    • Phone numbers must be claimed manually on the target instance"
+            echo "    • Claim via Connect console or ClaimPhoneNumber API"
             echo "    • For number porting (keep same DIDs): open AWS Support case"
             echo "    • After claiming: associate each number with the correct contact flow"
-            echo "      (see backup phone_flows.json for the original mappings)"
+            echo "      (see phonenumber_*.json files for source flow mappings)"
             echo "    → https://docs.aws.amazon.com/connect/latest/adminguide/claim-phone-number.html"
             echo "    → https://docs.aws.amazon.com/connect/latest/adminguide/port-phone-number.html"
             ;;
