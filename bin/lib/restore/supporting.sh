@@ -653,3 +653,255 @@ EOD
     done
     test $? -eq 0 || error
 fi
+
+
+############################################################
+#
+# Cases Config Restore (domain → fields → layouts → templates)
+#
+
+cat <<EOD
+
+Cases Config
+------------
+EOD
+egrep "^cases_fields_\|^cases_layouts_\|^cases_templates_" "$helper_new" > $TEMPNEW 2>/dev/null || true
+if [ ! -s $TEMPNEW ] && [ ! -s "$instance_alias_dir_a/cases_domains.json" ]; then
+    echo "No Cases config to restore"
+else
+    cases_domain_count=$(jq -s 'length' "$instance_alias_dir_a/cases_domains.json" 2>/dev/null || echo 0)
+    if [ "$cases_domain_count" -eq 0 ]; then
+        echo "No Cases domains in source backup"
+    else
+        while read domain_id_a domain_name; do
+            [ -z "$domain_id_a" ] && continue
+            domain_name_encoded=$(path_encode "$domain_name")
+
+            # Check if target already has a Cases domain
+            target_domain_id=$(jq -r ".domainId // empty" "$instance_alias_dir_b/cases_domains.json" 2>/dev/null | head -1 | dos2unix)
+
+            if [ -z "$target_domain_id" ]; then
+                # Create domain on target
+                cat <<EOD >> "$helper_log"
+
+$actionLead Create Cases domain: $domain_name
+EOD
+                if [ -n "$dryrun" ]; then
+                    echo "  [dry] Would create Cases domain: $domain_name"
+                else
+                    create_output=$(aws connectcases create-domain \
+                        --name "$domain_name" \
+                        $profile_flag 2>/dev/null) || true
+                    if [ -n "$create_output" ]; then
+                        target_domain_id=$(echo "$create_output" | jq -r '.domainId // empty' | dos2unix)
+                        echo -e "  ${C_PASS}✓ Created Cases domain: $domain_name (ID: $target_domain_id)${C_RESET}"
+                        cat <<EOD >> "$helper_sed"
+# Cases Domain: $domain_name
+s%$domain_id_a%$target_domain_id%g
+EOD
+                    else
+                        echo -e "  ${C_FAIL}✗ Failed to create Cases domain: $domain_name${C_RESET}" >&2
+                        continue
+                    fi
+                fi
+            else
+                echo "  Cases domain already exists on target (ID: $target_domain_id)"
+            fi
+
+            # Skip field/layout/template creation in dry-run if no domain ID
+            if [ -n "$dryrun" ] && [ -z "$target_domain_id" ]; then
+                target_domain_id="<new-domain-id>"
+            fi
+
+            # --- Create fields ---
+            fields_file="$instance_alias_dir_a/cases_fields_$domain_name_encoded.json"
+            if [ -f "$fields_file" ] && [ -s "$fields_file" ]; then
+                field_count=$(jq '.fields | length' "$fields_file" 2>/dev/null || echo 0)
+                if [ "$field_count" -gt 0 ]; then
+                    if [ -n "$dryrun" ]; then
+                        echo "  [dry] Would create $field_count field(s) in domain $domain_name"
+                    else
+                        # Filter out system fields (type SYSTEM) — only create custom fields
+                        custom_fields=$(jq '[.fields[] | select(.namespace != "System")]' "$fields_file" 2>/dev/null)
+                        custom_count=$(echo "$custom_fields" | jq 'length' 2>/dev/null || echo 0)
+                        if [ "$custom_count" -gt 0 ]; then
+                            # batch-create-field accepts up to 50 fields
+                            echo "$custom_fields" | jq -c '.[] | {name: .name, type: .type, description: (.description // "")}' |
+                            while IFS= read -r field_def; do
+                                [ -z "$field_def" ] && continue
+                                field_name=$(echo "$field_def" | jq -r '.name')
+                                aws connectcases batch-create-field \
+                                    --domain-id "$target_domain_id" \
+                                    --fields "[$field_def]" \
+                                    $profile_flag 2>/dev/null || true
+                            done
+                            echo -e "  ${C_PASS}✓ Created $custom_count custom field(s)${C_RESET}"
+                        fi
+                    fi
+                fi
+            fi
+
+            # --- Create layouts ---
+            layouts_file="$instance_alias_dir_a/cases_layouts_$domain_name_encoded.json"
+            if [ -f "$layouts_file" ] && [ -s "$layouts_file" ]; then
+                layout_count=$(jq '.layouts | length' "$layouts_file" 2>/dev/null || echo 0)
+                if [ "$layout_count" -gt 0 ]; then
+                    if [ -n "$dryrun" ]; then
+                        echo "  [dry] Would create $layout_count layout(s) in domain $domain_name"
+                    else
+                        while IFS= read -r layout_entry; do
+                            [ -z "$layout_entry" ] && continue
+                            layout_name=$(echo "$layout_entry" | jq -r '.name')
+                            layout_content=$(echo "$layout_entry" | jq -c '.content // {}')
+                            aws connectcases create-layout \
+                                --domain-id "$target_domain_id" \
+                                --name "$layout_name" \
+                                --content "$layout_content" \
+                                $profile_flag 2>/dev/null || true
+                        done < <(jq -c '.layouts[]' "$layouts_file" 2>/dev/null)
+                        echo -e "  ${C_PASS}✓ Created $layout_count layout(s)${C_RESET}"
+                    fi
+                fi
+            fi
+
+            # --- Create templates ---
+            templates_file="$instance_alias_dir_a/cases_templates_$domain_name_encoded.json"
+            if [ -f "$templates_file" ] && [ -s "$templates_file" ]; then
+                template_count=$(jq '.templates | length' "$templates_file" 2>/dev/null || echo 0)
+                if [ "$template_count" -gt 0 ]; then
+                    if [ -n "$dryrun" ]; then
+                        echo "  [dry] Would create $template_count template(s) in domain $domain_name"
+                    else
+                        while IFS= read -r template_entry; do
+                            [ -z "$template_entry" ] && continue
+                            template_name=$(echo "$template_entry" | jq -r '.name')
+                            template_payload=$(echo "$template_entry" | jq -c 'del(.templateId, .templateArn, .createdTime, .lastModifiedTime)')
+                            echo "$template_payload" > "$helper/cases_template_tmp.json"
+                            aws connectcases create-template \
+                                --domain-id "$target_domain_id" \
+                                --name "$template_name" \
+                                --cli-input-json "file://$helper/cases_template_tmp.json" \
+                                $profile_flag 2>/dev/null || true
+                        done < <(jq -c '.templates[]' "$templates_file" 2>/dev/null)
+                        echo -e "  ${C_PASS}✓ Created $template_count template(s)${C_RESET}"
+                    fi
+                fi
+            fi
+
+        done < <(jq -r ".domainId + \" \" + .name" "$instance_alias_dir_a/cases_domains.json" 2>/dev/null | tr -d '\r')
+    fi
+fi
+
+############################################################
+#
+# Customer Profiles Config Restore (domain → object types → calculated attributes)
+#
+
+cat <<EOD
+
+Customer Profiles Config
+------------------------
+EOD
+egrep "^profiles_objecttype_\|^profiles_calcattr_" "$helper_new" > $TEMPNEW 2>/dev/null || true
+profiles_domain_file="$instance_alias_dir_a/profiles_domain.json"
+if [ ! -f "$profiles_domain_file" ] || [ "$(jq '.DomainName // empty' "$profiles_domain_file" 2>/dev/null)" = "" ]; then
+    echo "No Customer Profiles config to restore"
+else
+    src_domain_name=$(jq -r '.DomainName // empty' "$profiles_domain_file" | dos2unix)
+    echo "  Source domain: $src_domain_name"
+
+    # Check if target has a profiles domain
+    target_profiles_domain=$(jq -r '.DomainName // empty' "$instance_alias_dir_b/profiles_domain.json" 2>/dev/null | dos2unix)
+
+    if [ -z "$target_profiles_domain" ]; then
+        # Create domain on target (use target instance alias as domain name)
+        target_domain_name="${instance_alias_b:-$src_domain_name}"
+        cat <<EOD >> "$helper_log"
+
+$actionLead Create Customer Profiles domain: $target_domain_name
+EOD
+        if [ -n "$dryrun" ]; then
+            echo "  [dry] Would create Customer Profiles domain: $target_domain_name"
+        else
+            create_output=$(aws customer-profiles create-domain \
+                --domain-name "$target_domain_name" \
+                --default-expiration-days 366 \
+                $profile_flag 2>/dev/null) || true
+            if [ -n "$create_output" ]; then
+                echo -e "  ${C_PASS}✓ Created Customer Profiles domain: $target_domain_name${C_RESET}"
+                target_profiles_domain="$target_domain_name"
+            else
+                echo -e "  ${C_FAIL}✗ Failed to create Customer Profiles domain${C_RESET}" >&2
+            fi
+        fi
+    else
+        echo "  Target domain exists: $target_profiles_domain"
+    fi
+
+    # --- Restore object types ---
+    if [ -s $TEMPNEW ] || [ -s "$instance_alias_dir_a/profiles_object_types.json" ]; then
+        ot_count=$(jq 'length' "$instance_alias_dir_a/profiles_object_types.json" 2>/dev/null || echo 0)
+        if [ "$ot_count" -gt 0 ]; then
+            restored_ot=0
+            while IFS= read -r ot_name; do
+                [ -z "$ot_name" ] && continue
+                ot_name_encoded=$(path_encode "$ot_name")
+                ot_file="$instance_alias_dir_a/profiles_objecttype_$ot_name_encoded.json"
+                [ -f "$ot_file" ] || continue
+
+                cat <<EOD >> "$helper_log"
+
+$actionLead Create/update object type: $ot_name
+EOD
+                if [ -n "$dryrun" ]; then
+                    echo "  [dry] Would put object type: $ot_name"
+                else
+                    # PutProfileObjectType is idempotent (creates or updates)
+                    ot_payload=$(jq 'del(.LastUpdatedAt, .CreatedAt, .Tags)' "$ot_file" 2>/dev/null)
+                    echo "$ot_payload" > "$helper/profiles_ot_$ot_name_encoded.json"
+                    aws customer-profiles put-profile-object-type \
+                        --domain-name "${target_profiles_domain:-$src_domain_name}" \
+                        --object-type-name "$ot_name" \
+                        --cli-input-json "file://$helper/profiles_ot_$ot_name_encoded.json" \
+                        $profile_flag 2>/dev/null || true
+                    restored_ot=$((restored_ot + 1))
+                fi
+            done < <(jq -r '.[].ObjectTypeName // empty' "$instance_alias_dir_a/profiles_object_types.json" | tr -d '\r')
+            if [ -z "$dryrun" ] && [ "$restored_ot" -gt 0 ]; then
+                echo -e "  ${C_PASS}✓ Restored $restored_ot object type(s)${C_RESET}"
+            fi
+        fi
+    fi
+
+    # --- Restore calculated attributes ---
+    ca_count=$(jq 'length' "$instance_alias_dir_a/profiles_calculated_attrs.json" 2>/dev/null || echo 0)
+    if [ "$ca_count" -gt 0 ]; then
+        restored_ca=0
+        while IFS= read -r ca_name; do
+            [ -z "$ca_name" ] && continue
+            ca_name_encoded=$(path_encode "$ca_name")
+            ca_file="$instance_alias_dir_a/profiles_calcattr_$ca_name_encoded.json"
+            [ -f "$ca_file" ] || continue
+
+            cat <<EOD >> "$helper_log"
+
+$actionLead Create calculated attribute: $ca_name
+EOD
+            if [ -n "$dryrun" ]; then
+                echo "  [dry] Would create calculated attribute: $ca_name"
+            else
+                ca_payload=$(jq 'del(.CreatedAt, .LastUpdatedAt, .Tags)' "$ca_file" 2>/dev/null)
+                echo "$ca_payload" > "$helper/profiles_ca_$ca_name_encoded.json"
+                aws customer-profiles create-calculated-attribute-definition \
+                    --domain-name "${target_profiles_domain:-$src_domain_name}" \
+                    --calculated-attribute-name "$ca_name" \
+                    --cli-input-json "file://$helper/profiles_ca_$ca_name_encoded.json" \
+                    $profile_flag 2>/dev/null || true
+                restored_ca=$((restored_ca + 1))
+            fi
+        done < <(jq -r '.[].CalculatedAttributeName // empty' "$instance_alias_dir_a/profiles_calculated_attrs.json" | tr -d '\r')
+        if [ -z "$dryrun" ] && [ "$restored_ca" -gt 0 ]; then
+            echo -e "  ${C_PASS}✓ Created $restored_ca calculated attribute(s)${C_RESET}"
+        fi
+    fi
+fi

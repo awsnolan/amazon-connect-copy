@@ -92,6 +92,71 @@ fi
 fi
 
 ############################################################
+# Customer Profiles (config only — not profile data)
+############################################################
+
+echo ""
+echo "Customer Profiles"
+echo "-----------------"
+profiles_domain="$instance_alias"
+profiles_check=$(aws customer-profiles get-domain \
+    --domain-name "$profiles_domain" \
+    $profile_flag 2>/dev/null)
+if [ -n "$profiles_check" ]; then
+    echo "$profiles_check" > "$instance_alias_dir/profiles_domain.json"
+    echo "  Domain: $profiles_domain"
+
+    # Object types (custom schemas)
+    aws customer-profiles list-profile-object-types \
+        --domain-name "$profiles_domain" \
+        --max-results 100 \
+        $profile_flag 2>/dev/null |
+    jq -r '.Items // []' > "$instance_alias_dir/profiles_object_types.json" 2>/dev/null || echo "[]" > "$instance_alias_dir/profiles_object_types.json"
+    ot_count=$(jq 'length' "$instance_alias_dir/profiles_object_types.json" 2>/dev/null || echo 0)
+    echo "  Object types: $ot_count"
+
+    # Export each object type detail
+    if [ "$ot_count" -gt 0 ]; then
+        while IFS= read -r ot_name; do
+            [ -z "$ot_name" ] && continue
+            ot_name_encoded=$(path_encode "$ot_name")
+            aws customer-profiles get-profile-object-type \
+                --domain-name "$profiles_domain" \
+                --object-type-name "$ot_name" \
+                $profile_flag 2>/dev/null \
+                > "$instance_alias_dir/profiles_objecttype_$ot_name_encoded.json" || true
+        done < <(jq -r '.[].ObjectTypeName // empty' "$instance_alias_dir/profiles_object_types.json" | tr -d '\r')
+    fi
+
+    # Calculated attributes
+    aws customer-profiles list-calculated-attribute-definitions \
+        --domain-name "$profiles_domain" \
+        --max-results 100 \
+        $profile_flag 2>/dev/null |
+    jq -r '.Items // []' > "$instance_alias_dir/profiles_calculated_attrs.json" 2>/dev/null || echo "[]" > "$instance_alias_dir/profiles_calculated_attrs.json"
+    ca_count=$(jq 'length' "$instance_alias_dir/profiles_calculated_attrs.json" 2>/dev/null || echo 0)
+    echo "  Calculated attributes: $ca_count"
+
+    # Export each calculated attribute detail
+    if [ "$ca_count" -gt 0 ]; then
+        while IFS= read -r ca_name; do
+            [ -z "$ca_name" ] && continue
+            ca_name_encoded=$(path_encode "$ca_name")
+            aws customer-profiles get-calculated-attribute-definition \
+                --domain-name "$profiles_domain" \
+                --calculated-attribute-name "$ca_name" \
+                $profile_flag 2>/dev/null \
+                > "$instance_alias_dir/profiles_calcattr_$ca_name_encoded.json" || true
+        done < <(jq -r '.[].CalculatedAttributeName // empty' "$instance_alias_dir/profiles_calculated_attrs.json" | tr -d '\r')
+    fi
+else
+    echo "  No Customer Profiles domain found (or not enabled)"
+    echo "{}" > "$instance_alias_dir/profiles_domain.json"
+    echo "[]" > "$instance_alias_dir/profiles_object_types.json"
+    echo "[]" > "$instance_alias_dir/profiles_calculated_attrs.json"
+fi
+
+############################################################
 # Contact Flow Modules
 ############################################################
 

@@ -122,12 +122,13 @@ by what the toolkit can fully automate versus what requires manual setup.
 | Phone number → flow mapping | Associated if number pre-claimed on target | — |
 | Lambda function associations | Associated | — |
 | Lex V2 bot associations | Associated | — |
+| Cases (domains, fields, layouts, templates) | Created on target (config only, no case records) | Case records not transferred |
+| Customer Profiles (object types, calculated attributes) | Created on target (config only, no profile data) | Profile records not transferred |
 
 ### Backed up only (reference for validation and manual setup)
 
 | Resource | Why not automated | Note |
 |----------|-------------------|------|
-| Cases (domains, fields, layouts, templates) | Config only; case records not portable | Agents take notes during DR, file cases on failback |
 | Outbound campaigns | Requires End User Messaging + recipient source | Campaign call history not transferable |
 | Email addresses | Requires SES domain verification (days, not minutes) | Email threads stay on source |
 | External dependencies manifest | Informational; Lambda/Lex deployed via `connect_deps_restore` | — |
@@ -372,6 +373,13 @@ connectcases:ListTemplates
 # Campaigns (if enabled)
 connect-campaigns-v2:ListCampaigns
 connect-campaigns-v2:DescribeCampaign
+
+# Customer Profiles (if enabled)
+profile:GetDomain
+profile:ListProfileObjectTypes
+profile:GetProfileObjectType
+profile:ListCalculatedAttributeDefinitions
+profile:GetCalculatedAttributeDefinition
 ```
 
 ### Restore profile (write access to target)
@@ -407,6 +415,18 @@ connect:CreateUser
 connect:CreateUserHierarchyGroup
 connect:CreateView
 connect:CreateVocabulary
+
+# Cases — create (config restore)
+connectcases:CreateDomain
+connectcases:BatchCreateField
+connectcases:BatchPutFieldOptions
+connectcases:CreateLayout
+connectcases:CreateTemplate
+
+# Customer Profiles — create (config restore)
+profile:CreateDomain
+profile:PutProfileObjectType
+profile:CreateCalculatedAttributeDefinition
 
 # Amazon Connect — update
 connect:ActivateEvaluationForm
@@ -497,6 +517,11 @@ connectcases:ListDomains
 connectcases:ListFields
 connectcases:ListLayouts
 connectcases:ListTemplates
+
+# Customer Profiles
+profile:GetDomain
+profile:ListProfileObjectTypes
+profile:ListCalculatedAttributeDefinitions
 ```
 
 ## Legacy Name Aliases

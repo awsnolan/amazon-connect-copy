@@ -337,3 +337,83 @@ if [ -s "$instance_alias_dir_a/campaigns.json" ]; then
     echo "campaigns.json" >> $helper_old
     echo "NOTE: Outbound campaigns reference Connect instance IDs and external resources - verify after copy."
 fi
+
+
+############################################################
+#
+# Connect Cases (config restore — domain, fields, layouts, templates)
+#
+
+echo Checking Cases Config ...
+if [ -s "$instance_alias_dir_a/cases_domains.json" ]; then
+    while read domain_id domain_name; do
+        [ -z "$domain_id" ] && continue
+        domain_name_encoded=$(path_encode "$domain_name")
+        # Check if target has a Cases domain (any domain = already set up)
+        target_domain=$(jq -r ".domainId // empty" "$instance_alias_dir_b/cases_domains.json" 2>/dev/null | head -1 | dos2unix)
+        if [ -z "$target_domain" ]; then
+            # New: domain + fields + layouts + templates all need creation
+            [ -f "$instance_alias_dir_a/cases_fields_$domain_name_encoded.json" ] && \
+                echo "cases_fields_$domain_name_encoded.json" >> $helper_new
+            [ -f "$instance_alias_dir_a/cases_layouts_$domain_name_encoded.json" ] && \
+                echo "cases_layouts_$domain_name_encoded.json" >> $helper_new
+            [ -f "$instance_alias_dir_a/cases_templates_$domain_name_encoded.json" ] && \
+                echo "cases_templates_$domain_name_encoded.json" >> $helper_new
+        else
+            # Existing: compare field/layout/template counts for update
+            [ -f "$instance_alias_dir_a/cases_fields_$domain_name_encoded.json" ] && \
+                echo "cases_fields_$domain_name_encoded.json" >> $helper_old
+            [ -f "$instance_alias_dir_a/cases_layouts_$domain_name_encoded.json" ] && \
+                echo "cases_layouts_$domain_name_encoded.json" >> $helper_old
+            [ -f "$instance_alias_dir_a/cases_templates_$domain_name_encoded.json" ] && \
+                echo "cases_templates_$domain_name_encoded.json" >> $helper_old
+            cat <<EOD >> $helper_sed
+# Cases Domain: $domain_name
+s%$domain_id%$target_domain%g
+EOD
+        fi
+    done < <(jq -r ".domainId + \" \" + .name" "$instance_alias_dir_a/cases_domains.json" 2>/dev/null | tr -d '\r')
+fi
+
+############################################################
+#
+# Customer Profiles (config — object types, calculated attributes)
+#
+
+echo Checking Customer Profiles Config ...
+if [ -f "$instance_alias_dir_a/profiles_object_types.json" ] && \
+   [ "$(jq 'length' "$instance_alias_dir_a/profiles_object_types.json" 2>/dev/null)" != "0" ]; then
+    # Compare object types by name
+    while IFS= read -r ot_name; do
+        [ -z "$ot_name" ] && continue
+        ot_name_encoded=$(path_encode "$ot_name")
+        # Check if target has this object type
+        target_ot=$(jq -r ".[] | select(.ObjectTypeName == \"$ot_name\") | .ObjectTypeName // empty" \
+            "$instance_alias_dir_b/profiles_object_types.json" 2>/dev/null | head -1 | dos2unix)
+        if [ -z "$target_ot" ]; then
+            [ -f "$instance_alias_dir_a/profiles_objecttype_$ot_name_encoded.json" ] && \
+                echo "profiles_objecttype_$ot_name_encoded.json" >> $helper_new
+        else
+            [ -f "$instance_alias_dir_a/profiles_objecttype_$ot_name_encoded.json" ] && \
+                echo "profiles_objecttype_$ot_name_encoded.json" >> $helper_old
+        fi
+    done < <(jq -r '.[].ObjectTypeName // empty' "$instance_alias_dir_a/profiles_object_types.json" | tr -d '\r')
+fi
+
+if [ -f "$instance_alias_dir_a/profiles_calculated_attrs.json" ] && \
+   [ "$(jq 'length' "$instance_alias_dir_a/profiles_calculated_attrs.json" 2>/dev/null)" != "0" ]; then
+    # Compare calculated attributes by name
+    while IFS= read -r ca_name; do
+        [ -z "$ca_name" ] && continue
+        ca_name_encoded=$(path_encode "$ca_name")
+        target_ca=$(jq -r ".[] | select(.CalculatedAttributeName == \"$ca_name\") | .CalculatedAttributeName // empty" \
+            "$instance_alias_dir_b/profiles_calculated_attrs.json" 2>/dev/null | head -1 | dos2unix)
+        if [ -z "$target_ca" ]; then
+            [ -f "$instance_alias_dir_a/profiles_calcattr_$ca_name_encoded.json" ] && \
+                echo "profiles_calcattr_$ca_name_encoded.json" >> $helper_new
+        else
+            [ -f "$instance_alias_dir_a/profiles_calcattr_$ca_name_encoded.json" ] && \
+                echo "profiles_calcattr_$ca_name_encoded.json" >> $helper_old
+        fi
+    done < <(jq -r '.[].CalculatedAttributeName // empty' "$instance_alias_dir_a/profiles_calculated_attrs.json" | tr -d '\r')
+fi
