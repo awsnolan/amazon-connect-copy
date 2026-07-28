@@ -137,7 +137,7 @@ by what the toolkit can fully automate versus what requires manual setup.
 ### Software
 1. [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) (2.32 or higher)
 2. [jq](https://stedolan.github.io/jq/) (1.6 or higher)
-3. bash 4.0+ (macOS, Linux, CloudShell, WSL)
+3. bash 3.2+ (macOS, Linux, CloudShell, WSL)
 
 ### Target Instance (before restore)
 The target Amazon Connect instance **must already exist and be ACTIVE**. The

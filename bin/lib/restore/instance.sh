@@ -275,21 +275,16 @@ _resolve_security_profile_names() {
 if [ -s "$instance_alias_dir_a/users.json" ]; then
     echo "Processing users (routing profiles and security profiles must exist)"
 
-    # Build target user lookup: list users on target instance
-    declare -A target_user_ids
+    # Build target user lookup: list users on target instance → temp file
+    TARGET_USER_MAP="${TEMPFILE}_target_users"
+    > "$TARGET_USER_MAP"
     if [ -z "$dryrun" ]; then
-        while IFS=$'\t' read -r t_uid t_uname; do
-            [ -z "$t_uid" ] && continue
-            target_user_ids["$t_uname"]="$t_uid"
-        done < <(aws_connect list-users \
+        aws_connect list-users \
             --instance-id "$instance_id_b" 2>/dev/null | \
-            jq -r '.UserSummaryList[] | .Id + "\t" + .Username' | tr -d '\r')
+            jq -r '.UserSummaryList[] | .Username + "\t" + .Id' | tr -d '\r' > "$TARGET_USER_MAP"
     else
         # Dry-run: use local target backup files if available
-        while IFS=$'\t' read -r t_uid t_uname; do
-            [ -z "$t_uid" ] && continue
-            target_user_ids["$t_uname"]="$t_uid"
-        done < <(jq -r '.User.Id + "\t" + .User.Username' "$instance_alias_dir_b"/user_*.json 2>/dev/null | tr -d '\r')
+        jq -r '.User.Username + "\t" + .User.Id' "$instance_alias_dir_b"/user_*.json 2>/dev/null | tr -d '\r' > "$TARGET_USER_MAP"
     fi
 
     echo
@@ -302,8 +297,8 @@ if [ -s "$instance_alias_dir_a/users.json" ]; then
         user_file="$instance_alias_dir_a/user_$user_name_encoded.json"
         [ -f "$user_file" ] || continue
 
-        # Determine target user ID
-        user_id_b="${target_user_ids[$user_name]:-}"
+        # Determine target user ID via temp file lookup
+        user_id_b=$(grep "^${user_name}	" "$TARGET_USER_MAP" 2>/dev/null | head -1 | cut -f2)
         # Fallback: check local backup file
         if [ -z "$user_id_b" ]; then
             user_id_b=$(jq -r ".User.Id // empty" "$instance_alias_dir_b/user_$user_name_encoded.json" 2>/dev/null | tr -d '\r')
