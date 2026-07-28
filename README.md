@@ -119,6 +119,9 @@ by what the toolkit can fully automate versus what requires manual setup.
 | Views (agent workspace) | Created/updated | — |
 | Vocabularies (Contact Lens) | Created on target | — |
 | Data tables (structure + row data) | Created with full content | — |
+| Prompts (manifest + metadata) | Used for ID remapping; audio files not transferred | Upload audio manually or via deps tool |
+| Approved origins (CORS) | Associated on target | — |
+| Authentication profiles | Updated on target | — |
 | Phone number → flow mapping | Associated if number pre-claimed on target | — |
 | Lambda function associations | Associated | — |
 | Lex V2 bot associations | Associated | — |
@@ -131,6 +134,10 @@ by what the toolkit can fully automate versus what requires manual setup.
 |----------|-------------------|------|
 | Outbound campaigns | Requires End User Messaging + recipient source | Campaign call history not transferable |
 | Email addresses | Requires SES domain verification (days, not minutes) | Email threads stay on source |
+| Security keys (encryption) | Cannot be re-associated via API | Operator must re-associate in console |
+| Integration associations (Wisdom, Voice ID) | External service-level config | Verify external resources exist on target |
+| Attachment config | Informational reference | Target uses its own attachment settings |
+| User proficiencies | Backed up for validation; not written during restore | Verify via Layer 7.8 |
 | External dependencies manifest | Informational; Lambda/Lex deployed via `connect_deps_restore` | — |
 
 ## Prerequisites
