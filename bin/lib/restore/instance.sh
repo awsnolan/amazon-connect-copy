@@ -356,13 +356,54 @@ EOD
                     continue
                 fi
             else
-                # No password file — skip gracefully
-                if [ -n "$dryrun" ]; then
-                    echo -e "  ${C_SKIP}[skip] $user_name not found on target${C_RESET}"
+                # No password file — check --create-users flag
+                if [ -n "$CREATE_USERS" ]; then
+                    # Generate a temporary password (Connect requires: 8+ chars, upper, lower, number)
+                    local temp_password="DRtemp$(date +%s | tail -c 5)Aa1!"
+                    # Build create-user payload from source backup
+                    local create_json
+                    create_json=$(cat "$user_file" | \
+                        jq --arg iid "$instance_id_b" --arg pw "$temp_password" \
+                        '.User | del(.Id, .Arn, .DirectoryUserId, .LastModifiedTime, .LastModifiedRegion,
+                                      .AfterContactWorkConfigs, .AutoAcceptConfigs,
+                                      .PersistentConnectionConfigs, .PhoneNumberConfigs,
+                                      .VoiceEnhancementConfigs) |
+                         . + { InstanceId: $iid, Password: $pw }' | \
+                        sed -f "$helper_sed")
+
+                    cat <<EOD >> "$helper_log"
+
+$actionLead Create user: $user_name (auto-provisioned via --create-users)
+EOD
+                    if [ -n "$dryrun" ]; then
+                        echo -e "  ${C_WARN}[dry] Would create $user_name (temporary password)${C_RESET}"
+                    else
+                        echo "$create_json" > "$helper/user_create_$user_name_encoded.json"
+                        aws_connect create-user \
+                            --cli-input-json "file://$helper/user_create_$user_name_encoded.json" \
+                            > "$helper/output_user_$user_name_encoded.json" 2>/dev/null
+                        user_id_b=$(jq -r '.UserId // empty' "$helper/output_user_$user_name_encoded.json" 2>/dev/null | tr -d '\r')
+                        if [ -n "$user_id_b" ] && [ "$user_id_b" != "null" ]; then
+                            echo -e "  ${C_PASS}✓ Created $user_name (temporary password — change on first login)${C_RESET}"
+                            cat <<EOD >> "$helper_sed"
+# User: $user_name
+s%$user_id_a%$user_id_b%g
+EOD
+                        else
+                            echo -e "  ${C_FAIL}✗ Failed to create $user_name (is this a Connect-managed instance?)${C_RESET}" >&2
+                            continue
+                        fi
+                    fi
+                    # Fall through to update routing/security/hierarchy below
                 else
-                    echo -e "  ${C_SKIP}- Skipped $user_name (not found on target)${C_RESET}"
+                    # No --create-users flag — skip gracefully
+                    if [ -n "$dryrun" ]; then
+                        echo -e "  ${C_SKIP}[skip] $user_name not found on target${C_RESET}"
+                    else
+                        echo -e "  ${C_SKIP}- Skipped $user_name (not found on target)${C_RESET}"
+                    fi
+                    continue
                 fi
-                continue
             fi
         fi
 

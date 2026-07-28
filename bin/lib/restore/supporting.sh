@@ -393,11 +393,8 @@ else
 $actionLead Create view: $view_name_decoded
 EOD
         if [ -n "$dryrun" ]; then
-            cat <<EOD
-Dry-create view
-$(cat "$helper/$view_json")
-
-EOD
+            local view_size=$(wc -c < "$helper/$view_json" | tr -d ' ')
+            echo "  [dry] Would create view: $view_name_decoded ($view_size bytes)"
             cat <<EOD >> "$helper_log"
 aws connect create-view \
 --cli-input-json "file://$helper/$view_json" \
@@ -458,17 +455,14 @@ else
 $actionLead Update view: $view_name_decoded
 EOD
         if [ -n "$dryrun" ]; then
-            cat <<EOD
-Dry-update view
-$(cat "$helper/$view_json")
-
-EOD
+            local view_size=$(wc -c < "$helper/$view_json" | tr -d ' ')
+            echo "  [dry] Would update view: $view_name_decoded ($view_size bytes)"
             cat <<EOD >> "$helper_log"
 aws connect update-view-content \
 --instance-id $instance_id_b \
 --view-id $view_id_b \
 --status PUBLISHED \
---content "$(jq -r '.View.Content' "$helper/$view_json")"
+--content "file://$helper/$view_json"
 EOD
             continue
         fi

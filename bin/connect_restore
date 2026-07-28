@@ -30,6 +30,10 @@ Usage: $(basename $0) [-?dev] [--only sections] [--skip sections] [--user-passwo
                      CSV file mapping username to password for user creation
                      (same-account only). Format: username,password (one per line).
                      Users in this file will be CREATED if missing on target.
+    --create-users   Auto-create missing users with temporary passwords
+                     (Connect-managed instances only). Users get a generated
+                     password and must change it on first login. Identity info
+                     is copied from the source backup.
     --verbose        Show detailed API call info during dry-run
     -?      Help
 
@@ -139,6 +143,7 @@ ignore_improper_extended_ascii=
 ONLY_SECTIONS=
 SKIP_SECTIONS=
 USER_PASSWORD_FILE=
+CREATE_USERS=
 
 # Handle --only and --skip before getopts
 args=()
@@ -147,6 +152,7 @@ while [ $# -gt 0 ]; do
     --only) ONLY_SECTIONS="${2//,/ }"; shift 2;;
     --skip) SKIP_SECTIONS="${2//,/ }"; shift 2;;
     --user-password-file) USER_PASSWORD_FILE="$2"; shift 2;;
+    --create-users) CREATE_USERS=on; shift;;
     --verbose) verbose=on; shift;;
     *)      args+=("$1"); shift;;
     esac
