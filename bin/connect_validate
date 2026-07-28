@@ -794,9 +794,27 @@ else
     echo -e "${C_BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
 
     if [ "$FAIL" -gt 0 ]; then
+        # Smart messaging: detect whether this looks like pre-restore or post-restore
+        # Restorable layers: 2 (hours), 3 (queues partial), 4 (routing), 6 (hierarchy),
+        #   7 (users partial), 8 (QCs), 9 (modules), 10 (flows), 14 (supporting)
+        # Manual layers: 5 (security defaults), 11 (phone numbers)
+        local restorable_fails=0 manual_fails=0
+        for fl in $FAILED_LAYERS; do
+            case "$fl" in
+                2|4|6|8|9|10|14*) restorable_fails=$((restorable_fails + 1));;
+                5|11) manual_fails=$((manual_fails + 1));;
+                *) ;; # mixed layers (3, 7) or integrity (17)
+            esac
+        done
         echo ""
         echo -e "  ${C_FAIL}${C_BOLD}RESULT: FAIL ($FAIL test(s) failed)${C_RESET}"
-        echo -e "  ${C_FAIL}Review errors above. Instance is NOT ready for live traffic.${C_RESET}"
+        if [ "$restorable_fails" -gt "$manual_fails" ]; then
+            echo -e "  ${C_FAIL}Most failures are restorable. Run connect_restore then re-validate.${C_RESET}"
+        elif [ "$manual_fails" -gt 0 ] && [ "$restorable_fails" -eq 0 ]; then
+            echo -e "  ${C_FAIL}Remaining failures require manual action (phone numbers, security profiles).${C_RESET}"
+        else
+            echo -e "  ${C_FAIL}Review errors above. Re-run connect_restore or complete manual actions.${C_RESET}"
+        fi
         print_remediation
     elif [ "$WARN" -gt 0 ]; then
         echo ""

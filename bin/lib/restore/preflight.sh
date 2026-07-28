@@ -137,7 +137,6 @@ else
     lambda_count=$(jq ".LambdaFunctions | length" "$manifest_file" 2>/dev/null || echo 0)
     if [ "$lambda_count" -gt 0 ]; then
         echo "Lambda Functions ($lambda_count):"
-        jq -r ".LambdaFunctions[] | .Arn" "$manifest_file" | dos2unix |
         while read lambda_arn; do
             # Remap ARN prefix for target account/region
             lambda_arn_b=$(echo "$lambda_arn" | sed -f "$helper_sed")
@@ -155,7 +154,7 @@ else
                 echo "    Target ARN : $lambda_arn_b"
                 preflight_missing=$((preflight_missing + 1))
             fi
-        done
+        done < <(jq -r ".LambdaFunctions[] | .Arn" "$manifest_file" | dos2unix)
         echo
     fi
 
@@ -163,7 +162,6 @@ else
     lexv2_count=$(jq ".LexV2Bots | length" "$manifest_file" 2>/dev/null || echo 0)
     if [ "$lexv2_count" -gt 0 ]; then
         echo "Lex V2 Bots ($lexv2_count):"
-        jq -r ".LexV2Bots[] | .BotId + \" \" + .BotName + \" \" + .AliasId" "$manifest_file" | dos2unix |
         while read bot_id bot_name alias_id; do
             # Remap bot ARN
             bot_arn_a="arn:aws:lex:$region_a:$aws_ac_a:bot-alias/$bot_id/$alias_id"
@@ -177,12 +175,20 @@ else
             if [ -n "$exists" ]; then
                 echo "  ✓ $bot_name (id=$bot_id_b)"
             else
-                echo "  ✗ MISSING: $bot_name"
-                echo "    Source bot-id : $bot_id / alias: $alias_id"
-                echo "    Target bot-id : $bot_id_b / alias: $alias_id_b"
-                preflight_missing=$((preflight_missing + 1))
+                # Cross-account: bot ID differs — search by name
+                found_by_name=$(aws lexv2-models list-bots \
+                    $profile_flag 2>/dev/null | \
+                    jq -r ".botSummaries[] | select(.botName == \"$bot_name\") | .botId" 2>/dev/null | head -1)
+                if [ -n "$found_by_name" ]; then
+                    echo "  ✓ $bot_name (found by name, target-id=$found_by_name)"
+                else
+                    echo "  ✗ MISSING: $bot_name"
+                    echo "    Source bot-id : $bot_id / alias: $alias_id"
+                    echo "    Target bot-id : $bot_id_b / alias: $alias_id_b"
+                    preflight_missing=$((preflight_missing + 1))
+                fi
             fi
-        done
+        done < <(jq -r ".LexV2Bots[] | .BotId + \" \" + .BotName + \" \" + .AliasId" "$manifest_file" | dos2unix)
         echo
     fi
 
@@ -190,7 +196,6 @@ else
     lex_classic_count=$(jq ".LexClassicBots | length" "$manifest_file" 2>/dev/null || echo 0)
     if [ "$lex_classic_count" -gt 0 ]; then
         echo "Lex Classic Bots ($lex_classic_count):"
-        jq -r ".LexClassicBots[] | .Name + \" \" + .Region" "$manifest_file" | dos2unix |
         while read bot_name bot_region; do
             # Remap region if cross-region copy
             bot_region_b="${bot_region/$region_a/$region_b}"
@@ -210,7 +215,7 @@ else
                 echo "  ✗ MISSING: $bot_name_b (region=$bot_region_b)"
                 preflight_missing=$((preflight_missing + 1))
             fi
-        done
+        done < <(jq -r ".LexClassicBots[] | .Name + \" \" + .Region" "$manifest_file" | dos2unix)
         echo
     fi
 

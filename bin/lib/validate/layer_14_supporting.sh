@@ -57,7 +57,7 @@ validate_layer_14() {
         pa_count=$(jq -s 'length' "$instance_alias_dir/predefinedattributes.json" 2>/dev/null)
         if [ -n "$do_live" ] && [ "$pa_count" -gt 0 ]; then
             local pa_pass=0 pa_fail=0
-            local pa_val_pass=0 pa_val_fail=0
+            local pa_val_pass=0 pa_val_fail=0 pa_val_warn=0
             while IFS= read -r pa_name; do
                 [ -z "$pa_name" ] && continue
                 local live_pa
@@ -74,6 +74,10 @@ validate_layer_14() {
                     live_vals=$(echo "$live_pa" | jq -S '.PredefinedAttribute.Values.StringList // [] | sort' 2>/dev/null)
                     if [ "$saved_vals" = "$live_vals" ]; then
                         pa_val_pass=$((pa_val_pass + 1))
+                    elif [[ "$pa_name" == connect:* ]]; then
+                        # System-managed attributes differ per instance by design
+                        pa_val_warn=$((pa_val_warn + 1))
+                        [ -z "$JSON_OUTPUT" ] && echo "         → Values mismatch: $pa_name (system-managed, expected)" >&2
                     else
                         pa_val_fail=$((pa_val_fail + 1))
                         [ -z "$JSON_OUTPUT" ] && echo "         → Values mismatch: $pa_name" >&2
@@ -88,7 +92,11 @@ validate_layer_14() {
                 fail "14B.1" "Predefined attributes" "$pa_fail of $pa_count missing"
             fi
             if [ "$pa_val_fail" -eq 0 ] && [ "$pa_val_pass" -gt 0 ]; then
-                pass "14B.2" "Predefined attribute values match ($pa_val_pass/$pa_pass)"
+                if [ "$pa_val_warn" -gt 0 ]; then
+                    warn "14B.2" "Predefined attribute values" "$pa_val_warn system-managed differ (expected)"
+                else
+                    pass "14B.2" "Predefined attribute values match ($pa_val_pass/$pa_pass)"
+                fi
             elif [ "$pa_val_fail" -gt 0 ]; then
                 fail "14B.2" "Predefined attribute values" "$pa_val_fail mismatched"
             fi
