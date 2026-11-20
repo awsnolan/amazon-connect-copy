@@ -109,9 +109,54 @@ export DRILL=output/drill
 export LOG="$DRILL/drill-$(date +%Y%m%d-%H%M).log"
 export NO_COLOR=1      # clean, greppable logs
 
-# Timestamped phase marker — call this at the start of every phase
+# Phase tracking. phases.tsv holds completed phases; phases.running holds
+# the one in flight. connect_report reads both to build the dashboard.
+export PHASES="$DRILL/phases.tsv"
+export RUNNING="$DRILL/phases.running"
+: > "$PHASES"; : > "$RUNNING"
+printf '# num\tname\tstate\tstart\tend\texit\n' >> "$PHASES"
+
+# Call phase() at the start of every phase. It closes the previous one.
 phase() {
-  printf '\n=== %s | %s ===\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG"
+  local name="$*" now; now=$(date -u +%s)
+  if [ -s "$RUNNING" ]; then
+    local pn pnum pstart
+    IFS=$'\t' read -r pnum pn pstart < "$RUNNING"
+    printf '%s\t%s\tdone\t%s\t%s\t0\n' "$pnum" "$pn" "$pstart" "$now" >> "$PHASES"
+  fi
+  _PH=$(( ${_PH:-0} + 1 ))
+  printf '%s\t%s\t%s\n' "$_PH" "$name" "$now" > "$RUNNING"
+  printf '\n=== %s | %s ===\n' "$(date -u +%H:%M:%S)" "$name" | tee -a "$LOG"
+}
+
+# Call on failure to mark the current phase red instead of green.
+phase_fail() {
+  local now; now=$(date -u +%s)
+  if [ -s "$RUNNING" ]; then
+    local pn pnum pstart
+    IFS=$'\t' read -r pnum pn pstart < "$RUNNING"
+    printf '%s\t%s\tdone\t%s\t%s\t1\n' "$pnum" "$pn" "$pstart" "$now" >> "$PHASES"
+    : > "$RUNNING"
+  fi
+  printf 'PHASE FAILED: %s\n' "$*" | tee -a "$LOG"
+}
+
+# Call once at the very end to close the final phase.
+phase_done() {
+  local now; now=$(date -u +%s)
+  if [ -s "$RUNNING" ]; then
+    local pn pnum pstart
+    IFS=$'\t' read -r pnum pn pstart < "$RUNNING"
+    printf '%s\t%s\tdone\t%s\t%s\t0\n' "$pnum" "$pn" "$pstart" "$now" >> "$PHASES"
+    : > "$RUNNING"
+  fi
+}
+
+# Merge completed + in-flight for the dashboard
+phases_now() {
+  cat "$PHASES"
+  [ -s "$RUNNING" ] && awk -F'\t' '{printf "%s\t%s\trunning\t%s\t\t\n",$1,$2,$3}' "$RUNNING"
+  return 0
 }
 
 echo "Drill log: $LOG"
@@ -395,6 +440,50 @@ phase "Phase 9: idempotency probe"
 ```
 
 **Capture:** the verdict table. The outcome that matters most is whether `create-hours-of-operation-override` **silently duplicates**, because that would mean repeated restores quietly accumulate overrides and eventually fail Layer 2 for a reason that looks unrelated.
+
+---
+
+## 13a. Live dashboard
+
+Optional, but useful if anyone is watching the drill rather than running it.
+
+Open a second terminal, re-export the same variables from Section 4, then:
+
+```bash
+# Refresh the phase snapshot and rebuild the page every 20 seconds
+while :; do
+  phases_now > "$DRILL/phases_snapshot.tsv"
+  connect_report \
+    --validate "$DRILL/validate_1.json" \
+    --assess   "$DRILL/assess.json" \
+    --phases   "$DRILL/phases_snapshot.tsv" \
+    --rto      "$DRILL/rto_seconds" \
+    --manual   "$DRILL/manual_actions.txt" \
+    --target-rto 30 --refresh 20 \
+    --out "$DRILL/dashboard.html" >/dev/null
+  sleep 20
+done
+```
+
+Then open `output/drill/dashboard.html` in a browser. The page carries a
+`meta refresh`, so it reloads on the same interval and picks up each rebuild.
+It also reports its own age and turns the indicator amber if it goes stale,
+so a dead loop is visible rather than silently showing frozen data.
+
+Optional inputs can be absent — the corresponding tiles render grey as
+"not actioned" rather than failing.
+
+**Before sharing the screen**, regenerate with redaction:
+
+```bash
+connect_report --validate "$DRILL/validate_1.json" \
+  --assess "$DRILL/assess.json" --phases "$DRILL/phases_snapshot.tsv" \
+  --rto "$DRILL/rto_seconds" --manual "$DRILL/manual_actions.txt" \
+  --redact --refresh 0 --out "$DRILL/dashboard_shared.html"
+```
+
+That masks account ids, resource ids, phone numbers and email addresses.
+Instance aliases are kept, so the page still identifies its subject.
 
 ---
 

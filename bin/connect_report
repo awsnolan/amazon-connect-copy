@@ -1,0 +1,802 @@
+#!/bin/bash
+############################################################
+#
+# connect_report — single-page DR drill dashboard
+#
+# Renders one self-contained HTML file from the machine-readable
+# output the toolkit already produces:
+#
+#   connect_validate -j   ->  19 layers, per-test results, summary
+#   connect_assess   -j   ->  flow resilience counts
+#   phases.tsv            ->  drill phase timings (see DR_DRILL_RUNBOOK.md)
+#   rto_seconds           ->  measured recovery time
+#
+# The data is INLINED into the HTML. Nothing is fetched at view time,
+# so the file works from file:// with no server and no CORS problems,
+# and leaks nothing to a third party.
+#
+# The page contains instance and account identifiers. Keep it under
+# output/ (gitignored) and do not publish it. Use --redact before
+# screen-sharing.
+#
+# Requires: jq 1.6+, bash 3.2+
+#
+############################################################
+
+VERSION=1.0.0
+SCRIPT=$(basename "$0")
+
+usage() {
+    cat <<EOD
+Usage: $SCRIPT --validate FILE [options]
+
+    Build a single-page HTML dashboard from drill output.
+
+    --validate FILE    connect_validate -j output (required)
+    --assess FILE      connect_assess -j output
+    --phases FILE      phase timing TSV
+    --rto FILE|SECS    measured RTO: a file containing seconds, or seconds
+    --target-rto MIN   target RTO in minutes for the bullet graph (default 30)
+    --manual FILE      manual actions text file (one per line)
+    --out FILE         output path (default: alongside --validate)
+    --refresh N        auto-refresh seconds; 0 disables (default 30)
+    --watch            regenerate every --refresh seconds until interrupted
+    --redact           mask account ids, instance ids, ARNs, phone numbers,
+                       and email addresses. Instance ALIASES are kept, since
+                       they identify which instance you are looking at.
+    --title TEXT       override the headline
+    -v                 version
+    -?, --help         this help
+
+Examples:
+    # One-off page
+    $SCRIPT --validate output/drill/validate_1.json \\
+            --assess output/drill/assess.json \\
+            --phases output/drill/phases.tsv \\
+            --rto output/drill/rto_seconds
+
+    # Live during a drill: regenerate every 15s, page reloads to match
+    $SCRIPT --validate output/drill/validate_1.json --refresh 15 --watch
+
+    # Safe for screen-sharing
+    $SCRIPT --validate output/drill/validate_1.json --redact --refresh 0
+EOD
+}
+
+############################################################
+# Arguments
+############################################################
+
+validate_f=""; assess_f=""; phases_f=""; rto_in=""; manual_f=""
+out_f=""; refresh=30; target_rto=30; redact=""; watch=""; title_override=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --validate)   validate_f="$2"; shift 2;;
+        --assess)     assess_f="$2"; shift 2;;
+        --phases)     phases_f="$2"; shift 2;;
+        --rto)        rto_in="$2"; shift 2;;
+        --manual)     manual_f="$2"; shift 2;;
+        --out)        out_f="$2"; shift 2;;
+        --refresh)    refresh="$2"; shift 2;;
+        --target-rto) target_rto="$2"; shift 2;;
+        --redact)     redact=1; shift;;
+        --watch)      watch=1; shift;;
+        --title)      title_override="$2"; shift 2;;
+        -v)           echo "$SCRIPT $VERSION"; exit 0;;
+        -\?|--help)   usage; exit 0;;
+        *)            echo "Unknown option: $1" >&2; usage; exit 1;;
+    esac
+done
+
+[ -z "$validate_f" ] && { echo "Error: --validate is required" >&2; usage; exit 1; }
+[ -r "$validate_f" ] || { echo "Error: cannot read $validate_f" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "Error: jq not found" >&2; exit 1; }
+
+case "$refresh" in ''|*[!0-9]*) echo "Error: --refresh must be an integer" >&2; exit 1;; esac
+case "$target_rto" in ''|*[!0-9]*) echo "Error: --target-rto must be an integer" >&2; exit 1;; esac
+
+[ -z "$out_f" ] && out_f="$(dirname "$validate_f")/dashboard.html"
+
+############################################################
+# Redaction
+#
+# Applied to the rendered HTML as a final pass, so it catches
+# identifiers wherever they appear including inside test labels.
+############################################################
+
+redact_stream() {
+    if [ -z "$redact" ]; then
+        cat
+    else
+        # Order matters. UUIDs must be masked BEFORE the 12-digit rule,
+        # because a UUID's final group is itself 12 hex characters and will
+        # often be 12 digits — masking that first would relabel resource ids
+        # as account ids. Emails before phone numbers for the same reason.
+        sed -E \
+            -e 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/\&lt;resource-id\&gt;/g' \
+            -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/\&lt;email\&gt;/g' \
+            -e 's/[0-9]{12}/\&lt;account-id\&gt;/g' \
+            -e 's/\+[0-9]{8,15}/+1555XXXXXXX/g'
+    fi
+}
+
+############################################################
+# HTML escaping for values interpolated outside jq
+############################################################
+
+esc() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
+}
+
+############################################################
+# Build one page
+############################################################
+
+build() {
+
+local now_epoch=$(date -u +%s)
+local now_human=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+
+# ---------- validate JSON ----------
+local v_result v_mode v_instance v_ts v_dur v_total v_pass v_fail v_warn v_skip
+v_result=$(jq -r '.result // "UNKNOWN"' "$validate_f")
+v_mode=$(jq -r '.mode // "unknown"' "$validate_f")
+v_instance=$(jq -r '.instance // "unknown"' "$validate_f")
+v_ts=$(jq -r '.timestamp // ""' "$validate_f")
+v_dur=$(jq -r '.duration_seconds // 0' "$validate_f")
+v_total=$(jq -r '.summary.total // 0' "$validate_f")
+v_pass=$(jq -r '.summary.pass // 0' "$validate_f")
+v_fail=$(jq -r '.summary.fail // 0' "$validate_f")
+v_warn=$(jq -r '.summary.warn // 0' "$validate_f")
+v_skip=$(jq -r '.summary.skip // 0' "$validate_f")
+
+# Layer tallies. Layers absent from the JSON are "not actioned", which is
+# a real state: it tells the reader a check did not run, not that it passed.
+local ALL_LAYERS="0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18"
+local layers_present layers_pass layers_warn layers_fail layers_notrun layers_total
+layers_present=$(jq -r '[.layers[].id] | length' "$validate_f")
+layers_pass=$(jq -r '[.layers[] | select(.result=="PASS")] | length' "$validate_f")
+layers_warn=$(jq -r '[.layers[] | select(.result=="WARN")] | length' "$validate_f")
+layers_fail=$(jq -r '[.layers[] | select(.result=="FAIL")] | length' "$validate_f")
+layers_total=$(printf '%s\n' $ALL_LAYERS | wc -l | tr -d ' ')
+layers_notrun=$(( layers_total - layers_present ))
+
+# ---------- assess JSON ----------
+local a_flows a_blocks a_graceful a_notgraceful a_degraded a_have=""
+if [ -n "$assess_f" ] && [ -r "$assess_f" ]; then
+    a_have=1
+    a_flows=$(jq -r '.flows_assessed // 0' "$assess_f")
+    a_blocks=$(jq -r '.blocks_assessed // 0' "$assess_f")
+    a_graceful=$(jq -r '.graceful // 0' "$assess_f")
+    a_notgraceful=$(jq -r '.not_graceful // 0' "$assess_f")
+    a_degraded=$(jq -r '.degraded // 0' "$assess_f")
+fi
+
+# ---------- RTO ----------
+local rto_secs="" rto_min="" rto_pct=0 target_pct=0 scale_max=0
+if [ -n "$rto_in" ]; then
+    if [ -r "$rto_in" ]; then rto_secs=$(tr -dc '0-9' < "$rto_in"); else rto_secs=$(printf '%s' "$rto_in" | tr -dc '0-9'); fi
+fi
+if [ -n "$rto_secs" ] && [ "$rto_secs" -gt 0 ] 2>/dev/null; then
+    rto_min=$(( rto_secs / 60 ))
+    # Scale so both the measure and the target are always visible
+    local bigger=$(( rto_min > target_rto ? rto_min : target_rto ))
+    scale_max=$(( bigger * 3 / 2 ))
+    [ "$scale_max" -lt 1 ] && scale_max=1
+    rto_pct=$(( rto_min * 100 / scale_max ))
+    target_pct=$(( target_rto * 100 / scale_max ))
+    [ "$rto_pct" -gt 100 ] && rto_pct=100
+fi
+
+# ---------- phases ----------
+# TSV: num <tab> name <tab> state <tab> start_epoch <tab> end_epoch <tab> exit
+# state: done | running | failed | pending
+local phases_rows="" phase_count=0 running_count=0
+if [ -n "$phases_f" ] && [ -r "$phases_f" ]; then
+    phase_count=$(grep -cvE '^\s*(#|$)' "$phases_f" 2>/dev/null || echo 0)
+    running_count=$(awk -F'\t' '$3=="running"{n++} END{print n+0}' "$phases_f" 2>/dev/null || echo 0)
+fi
+
+# ---------- headline ----------
+local headline
+if [ -n "$title_override" ]; then
+    headline="$title_override"
+else
+    headline="$layers_pass of $layers_total layers passing"
+    [ -n "$rto_min" ] && headline="$headline, RTO ${rto_min} min against a ${target_rto} min target"
+fi
+
+# ---------- verdict ----------
+local verdict_state verdict_glyph verdict_text
+if [ "$layers_fail" -gt 0 ]; then
+    verdict_state="fail"; verdict_glyph="✗"
+    verdict_text="NOT READY FOR TRAFFIC — ${layers_fail} failing layer(s)"
+elif [ "$layers_warn" -gt 0 ] || [ "$layers_notrun" -gt 0 ]; then
+    verdict_state="warn"; verdict_glyph="!"
+    verdict_text="READY WITH CAVEATS — ${layers_warn} warning(s), ${layers_notrun} layer(s) not run"
+else
+    verdict_state="pass"; verdict_glyph="✓"
+    verdict_text="READY FOR TRAFFIC — all ${layers_total} layers passing"
+fi
+
+############################################################
+# Emit
+############################################################
+
+{
+
+# ---- head (static) ----
+cat <<'HTMLHEAD'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DR Drill Status</title>
+HTMLHEAD
+
+# ---- refresh (dynamic) ----
+if [ "$refresh" -gt 0 ]; then
+    printf '<meta http-equiv="refresh" content="%s">\n' "$refresh"
+fi
+
+# ---- styles (static) ----
+cat <<'HTMLCSS'
+<style>
+  :root{
+    --bg:#fff; --ink:#333; --ink2:#666; --ink3:#8a8a8a;
+    --rule:#ddd; --rule2:#eee; --panel:#fcfcfc;
+    --pass:#59a14f; --warn:#e8a33d; --fail:#e15759; --none:#c0c0c0;
+    --accent:#2f6f9f;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:14px/1.5 system-ui,"Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 22px 60px}
+
+  /* ---------- header ---------- */
+  header{border-bottom:2px solid var(--ink);padding-bottom:12px;margin-bottom:18px}
+  h1{margin:0 0 6px;font-size:21px;font-weight:600;letter-spacing:-.2px}
+  .meta{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12px;color:var(--ink2)}
+  .meta .sep{color:var(--none)}
+  .live{margin-left:auto;display:flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--pass);display:inline-block}
+  .dot.stale{background:var(--warn)}
+
+  /* ---------- verdict ---------- */
+  .verdict{
+    display:flex;align-items:center;gap:12px;
+    border:1px solid var(--rule);border-left:5px solid var(--none);
+    border-radius:3px;padding:13px 16px;margin-bottom:18px;background:var(--panel);
+    font-size:15px;font-weight:600;
+  }
+  .verdict.pass{border-left-color:var(--pass)}
+  .verdict.warn{border-left-color:var(--warn)}
+  .verdict.fail{border-left-color:var(--fail)}
+  .verdict .g{font-size:17px}
+  .verdict.pass .g{color:var(--pass)}
+  .verdict.warn .g{color:var(--warn)}
+  .verdict.fail .g{color:var(--fail)}
+
+  /* ---------- tiles ---------- */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(248px,1fr));gap:14px;margin-bottom:22px}
+  .tile{border:1px solid var(--rule);border-radius:3px;padding:14px 16px;background:var(--bg)}
+  .tile h2{
+    margin:0 0 10px;font-size:10.5px;font-weight:600;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--ink2)
+  }
+  .big{font-size:30px;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+  .unit{font-size:14px;font-weight:400;color:var(--ink2);margin-left:3px}
+  .sub{font-size:12px;color:var(--ink2);margin-top:5px}
+
+  /* ---------- bullet graph (Few): measure, target marker, qualitative bands ---------- */
+  .bullet{margin-top:12px}
+  .bullet .track{position:relative;height:22px;background:#f0f0f0;border-radius:2px;overflow:hidden}
+  .bullet .band{position:absolute;top:0;bottom:0;background:#e3e3e3}
+  .bullet .band2{position:absolute;top:0;bottom:0;background:#d2d2d2}
+  .bullet .measure{position:absolute;top:5px;bottom:5px;left:0;background:var(--ink3);border-radius:1px}
+  .bullet .measure.over{background:var(--fail)}
+  .bullet .measure.under{background:var(--pass)}
+  .bullet .target{position:absolute;top:0;bottom:0;width:3px;background:var(--ink)}
+  .bullet .scale{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink2);margin-top:4px;font-variant-numeric:tabular-nums}
+
+  /* ---------- status chips / counts ---------- */
+  .counts{display:flex;flex-direction:column;gap:5px;margin-top:2px}
+  .cnt{display:flex;align-items:baseline;gap:8px;font-size:13px}
+  .cnt b{font-variant-numeric:tabular-nums;min-width:2.2em;text-align:right;font-weight:600}
+  .sw{width:9px;height:9px;border-radius:2px;display:inline-block;flex:0 0 auto}
+  .sw.pass{background:var(--pass)} .sw.warn{background:var(--warn)}
+  .sw.fail{background:var(--fail)} .sw.none{background:var(--none)}
+
+  /* ---------- sections ---------- */
+  section{margin-bottom:26px}
+  section>h2{
+    margin:0 0 10px;font-size:11px;font-weight:600;letter-spacing:.09em;
+    text-transform:uppercase;color:var(--ink2);
+    border-bottom:1px solid var(--rule);padding-bottom:6px;
+    display:flex;align-items:baseline;gap:10px
+  }
+  section>h2 .note{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;font-size:11.5px;color:var(--ink3)}
+
+  /* ---------- phases ---------- */
+  .phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+  .ph{border:1px solid var(--rule);border-top:3px solid var(--none);border-radius:2px;padding:9px 11px}
+  .ph.done{border-top-color:var(--pass)}
+  .ph.running{border-top-color:var(--accent)}
+  .ph.failed{border-top-color:var(--fail)}
+  .ph.pending{border-top-color:var(--none);background:var(--panel)}
+  .ph .n{font-size:10.5px;color:var(--ink3);font-weight:600}
+  .ph .nm{font-size:12.5px;font-weight:600;margin:1px 0 3px}
+  .ph .t{font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums}
+  .ph.pending .nm,.ph.pending .t{color:var(--ink3)}
+
+  /* ---------- layer table ---------- */
+  table{width:100%;border-collapse:collapse}
+  th{
+    text-align:left;font-size:10.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--ink2);border-bottom:1px solid var(--rule);padding:0 10px 7px
+  }
+  th.num,td.num{text-align:right;width:34px}
+  th.st,td.st{width:112px}
+  th.ts,td.ts{width:74px;text-align:right;font-variant-numeric:tabular-nums}
+  td{border-bottom:1px solid var(--rule2);padding:7px 10px;vertical-align:top}
+  tr.lyr:hover{background:var(--panel)}
+  tr.lyr.has-detail{cursor:pointer}
+  .nm2{font-weight:500}
+  .tag{
+    display:inline-block;margin-left:7px;padding:1px 5px;border-radius:2px;
+    background:#eef3f8;color:var(--accent);font-size:10px;font-weight:600;letter-spacing:.03em
+  }
+  .why{color:var(--ink3);font-size:12px;margin-left:7px}
+  .status{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;white-space:nowrap}
+  .status .g{font-weight:700;width:11px;display:inline-block;text-align:center}
+  .status.pass{color:var(--pass)} .status.warn{color:var(--warn)}
+  .status.fail{color:var(--fail)} .status.none{color:var(--ink3)}
+  .caret{display:inline-block;width:12px;color:var(--ink3);font-size:10px}
+
+  /* ---------- test detail ---------- */
+  tr.detail{display:none}
+  tr.detail.open{display:table-row}
+  tr.detail td{background:var(--panel);padding:0 10px 10px}
+  .tests{margin:0;padding:8px 0 0;list-style:none;border-left:2px solid var(--rule);padding-left:14px}
+  .tests li{display:flex;gap:9px;padding:3px 0;font-size:12.5px;align-items:baseline}
+  .tests .g{width:11px;text-align:center;font-weight:700;flex:0 0 auto}
+  .tests .id{color:var(--ink3);font-variant-numeric:tabular-nums;flex:0 0 auto;min-width:3.4em}
+  .tests .pass .g{color:var(--pass)} .tests .warn .g{color:var(--warn)}
+  .tests .fail .g{color:var(--fail)} .tests .none .g{color:var(--none)}
+
+  /* ---------- action list ---------- */
+  .acts{list-style:none;margin:0;padding:0}
+  .acts li{display:flex;gap:12px;align-items:baseline;padding:8px 10px;border-bottom:1px solid var(--rule2)}
+  .acts .g{width:12px;text-align:center;font-weight:700;flex:0 0 auto}
+  .acts .lbl{flex:0 0 118px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink2)}
+  .acts .fail .g,.acts li.fail .g{color:var(--fail)}
+  .acts li.warn .g{color:var(--warn)}
+  .acts li.none .g{color:var(--none)}
+  .blocker{background:#fdf0f0}
+  .blocker .lbl{color:var(--fail)}
+
+  /* ---------- footer ---------- */
+  footer{
+    border-top:1px solid var(--rule);margin-top:30px;padding-top:12px;
+    font-size:11.5px;color:var(--ink3);line-height:1.7
+  }
+  footer .warnbox{
+    margin-top:9px;padding:7px 10px;border-left:3px solid var(--warn);
+    background:#fdf8ef;color:var(--ink2)
+  }
+  .none-msg{color:var(--ink3);font-size:13px;padding:8px 10px}
+
+  @media print{
+    body{font-size:11px}
+    .live{display:none}
+    tr.detail{display:table-row !important}
+    .wrap{max-width:none;padding:0}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+HTMLCSS
+
+# ---- header ----
+cat <<EOD
+<header>
+  <h1>DR Drill — $(esc "$headline")</h1>
+  <div class="meta">
+    <span>$(esc "$v_instance")</span>
+    <span class="sep">·</span>
+    <span>mode: $(esc "$v_mode")</span>
+    <span class="sep">·</span>
+    <span>validated $(esc "$v_ts")</span>
+    <span class="sep">·</span>
+    <span>${v_dur}s</span>
+    <span class="live">
+      <span class="dot" id="freshdot"></span>
+      <span id="freshtext">updated just now</span>
+EOD
+if [ "$refresh" -gt 0 ]; then
+    printf '      <span class="sep">·</span><span>refresh %ss</span>\n' "$refresh"
+fi
+cat <<EOD
+    </span>
+  </div>
+</header>
+
+<div class="verdict $verdict_state">
+  <span class="g">$verdict_glyph</span>
+  <span>$(esc "$verdict_text")</span>
+</div>
+EOD
+
+# ---- tiles ----
+echo '<div class="tiles">'
+
+# RTO tile (bullet graph)
+if [ -n "$rto_min" ]; then
+    local mcls="under"; [ "$rto_min" -gt "$target_rto" ] && mcls="over"
+    local b1=$(( target_pct * 70 / 100 )); local b2=$target_pct
+    cat <<EOD
+  <div class="tile">
+    <h2>Measured RTO</h2>
+    <div class="big">${rto_min}<span class="unit">min</span></div>
+    <div class="sub">restore start to first answered call</div>
+    <div class="bullet">
+      <div class="track">
+        <div class="band" style="left:0;width:${b1}%"></div>
+        <div class="band2" style="left:${b1}%;width:$(( b2 - b1 ))%"></div>
+        <div class="measure ${mcls}" style="width:${rto_pct}%"></div>
+        <div class="target" style="left:${target_pct}%"></div>
+      </div>
+      <div class="scale"><span>0</span><span>target ${target_rto}</span><span>${scale_max} min</span></div>
+    </div>
+  </div>
+EOD
+else
+    cat <<EOD
+  <div class="tile">
+    <h2>Measured RTO</h2>
+    <div class="big" style="color:var(--none)">–</div>
+    <div class="sub">not measured yet</div>
+  </div>
+EOD
+fi
+
+# Layers tile
+cat <<EOD
+  <div class="tile">
+    <h2>Validation layers</h2>
+    <div class="big">${layers_pass}<span class="unit">/ ${layers_total}</span></div>
+    <div class="counts">
+      <div class="cnt"><span class="sw pass"></span><b>${layers_pass}</b> pass</div>
+      <div class="cnt"><span class="sw warn"></span><b>${layers_warn}</b> warn</div>
+      <div class="cnt"><span class="sw fail"></span><b>${layers_fail}</b> fail</div>
+      <div class="cnt"><span class="sw none"></span><b>${layers_notrun}</b> not actioned</div>
+    </div>
+  </div>
+EOD
+
+# Tests tile
+cat <<EOD
+  <div class="tile">
+    <h2>Individual checks</h2>
+    <div class="big">${v_pass}<span class="unit">/ ${v_total}</span></div>
+    <div class="counts">
+      <div class="cnt"><span class="sw warn"></span><b>${v_warn}</b> warn</div>
+      <div class="cnt"><span class="sw fail"></span><b>${v_fail}</b> fail</div>
+      <div class="cnt"><span class="sw none"></span><b>${v_skip}</b> skipped</div>
+    </div>
+  </div>
+EOD
+
+# Flow resilience tile
+if [ -n "$a_have" ]; then
+    local fr_state="pass"; local fr_glyph="✓"
+    [ "${a_degraded:-0}" -gt 0 ] && { fr_state="warn"; fr_glyph="!"; }
+    [ "${a_notgraceful:-0}" -gt 0 ] && { fr_state="fail"; fr_glyph="✗"; }
+    cat <<EOD
+  <div class="tile">
+    <h2>Flow resilience</h2>
+    <div class="big">${a_graceful}<span class="unit">/ ${a_blocks}</span></div>
+    <div class="sub">${a_flows} flows · dependency blocks degrading gracefully</div>
+    <div class="counts">
+      <div class="cnt"><span class="sw warn"></span><b>${a_degraded}</b> degraded</div>
+      <div class="cnt"><span class="sw fail"></span><b>${a_notgraceful}</b> fail hard</div>
+    </div>
+  </div>
+EOD
+else
+    cat <<EOD
+  <div class="tile">
+    <h2>Flow resilience</h2>
+    <div class="big" style="color:var(--none)">–</div>
+    <div class="sub">connect_assess not run</div>
+  </div>
+EOD
+fi
+
+echo '</div>'
+
+# ---- phases ----
+if [ "$phase_count" -gt 0 ]; then
+    cat <<EOD
+<section>
+  <h2>Drill phases <span class="note">${phase_count} recorded</span></h2>
+  <div class="phases">
+EOD
+    # Emit each phase. A running phase carries data-start so a live elapsed
+    # timer can be switched on later without changing the generator.
+    awk -F'\t' -v now="$now_epoch" '
+      /^[[:space:]]*(#|$)/ { next }
+      {
+        num=$1; name=$2; state=$3; st=$4; en=$5; ex=$6;
+        if (state == "") state = "pending";
+        if (state == "done" && ex != "" && ex != "0") state = "failed";
+        dur = "";
+        if (state == "running" && st != "") dur = now - st;
+        else if (st != "" && en != "")      dur = en - st;
+        label = "pending";
+        if (dur != "") {
+          h = int(dur/3600); m = int((dur%3600)/60); s = dur%60;
+          label = sprintf("%02d:%02d:%02d", h, m, s);
+        }
+        glyph = "–";
+        if (state=="done") glyph="✓"; else if (state=="failed") glyph="✗";
+        else if (state=="running") glyph="▸";
+        printf "    <div class=\"ph %s\"%s>\n", state, (state=="running" && st!="" ? " data-start=\"" st "\"" : "");
+        printf "      <div class=\"n\">%s %s</div>\n", glyph, num;
+        printf "      <div class=\"nm\">%s</div>\n", name;
+        printf "      <div class=\"t\"><span class=\"fixed\">%s</span><span class=\"elapsed\" hidden></span></div>\n", label;
+        printf "    </div>\n";
+      }
+    ' "$phases_f"
+    echo '  </div>'
+    echo '</section>'
+fi
+
+# ---- layer table ----
+cat <<'EOD'
+<section>
+  <h2>Validation layers <span class="note">rows with findings are expanded; click any row to toggle</span></h2>
+  <table>
+    <thead>
+      <tr>
+        <th class="num">ID</th>
+        <th>Layer</th>
+        <th class="st">Status</th>
+        <th class="ts">Checks</th>
+      </tr>
+    </thead>
+    <tbody>
+EOD
+
+# Known layer names, so absent layers can still be listed as not-actioned.
+jq -r --arg skipped_note "did not run in this mode" '
+  def nm:
+    { "0":"External Dependencies","1":"Instance Foundation","2":"Hours of Operations",
+      "3":"Queues","4":"Routing Profiles","5":"Security Profiles","6":"User Hierarchy",
+      "7":"Users","8":"Quick Connects","9":"Contact Flow Modules","10":"Contact Flows",
+      "11":"Phone Numbers","12":"Integration Associations","13":"Email Channel",
+      "14":"Supporting Resources","15":"Cases \u0026 Customer Profiles","16":"Outbound Campaigns",
+      "17":"Cross-Reference Integrity","18":"Smoke Tests" };
+  def cls(r): if r=="PASS" then "pass" elif r=="WARN" then "warn" elif r=="FAIL" then "fail" else "none" end;
+  def gly(r): if r=="PASS" then "\u2713" elif r=="WARN" then "!" elif r=="FAIL" then "\u2717" else "\u2013" end;
+  def word(r): if r=="PASS" then "Pass" elif r=="WARN" then "Warn" elif r=="FAIL" then "Fail" else "Not run" end;
+  def esc: tostring | gsub("&";"\u0026amp;") | gsub("<";"\u0026lt;") | gsub(">";"\u0026gt;") | gsub("\"";"\u0026quot;");
+
+  (.layers // []) as $ls
+  | ([$ls[].id | tostring]) as $have
+  | [ range(0;19) | tostring ]
+  | map(
+      . as $id
+      | ($ls[] | select((.id|tostring) == $id)) // null as $L
+      | if $L == null then
+          { id:$id, name:(nm[$id] // ("Layer " + $id)), result:"NONE",
+            tests:[], pass:0, total:0, note:$skipped_note }
+        else
+          { id:$id, name:($L.name // nm[$id] // ("Layer " + $id)),
+            result:($L.result // "NONE"),
+            tests:($L.tests // []),
+            pass:([ ($L.tests // [])[] | select(.result=="PASS") ] | length),
+            total:(($L.tests // []) | length),
+            note:"" }
+        end
+    )
+  | .[]
+  | . as $r
+  | ($r.id|tonumber) as $n
+  | (if $n == 2 or $n == 3 then "<span class=\"tag\">B5</span>" else "" end) as $tag
+  | (if ($r.result=="FAIL" or $r.result=="WARN") and ($r.tests|length) > 0 then " open" else "" end) as $openc
+  | (if ($r.tests|length) > 0 then "has-detail" else "" end) as $hasd
+  | (if ($r.tests|length) > 0 then (if ($r.result=="FAIL" or $r.result=="WARN") then "\u25be" else "\u25b8" end) else "" end) as $caret
+  |
+  "      <tr class=\"lyr \($hasd)\" data-row=\"\($r.id)\">",
+  "        <td class=\"num\">\($r.id)</td>",
+  "        <td><span class=\"caret\">\($caret)</span><span class=\"nm2\">\($r.name|esc)</span>\($tag)\(if $r.note != "" then "<span class=\"why\">\($r.note|esc)</span>" else "" end)</td>",
+  "        <td class=\"st\"><span class=\"status \(cls($r.result))\"><span class=\"g\">\(gly($r.result))</span>\(word($r.result))</span></td>",
+  "        <td class=\"ts\">\(if $r.total > 0 then "\($r.pass) / \($r.total)" else "–" end)</td>",
+  "      </tr>",
+  (if ($r.tests|length) > 0 then
+    ( "      <tr class=\"detail\($openc)\" data-for=\"\($r.id)\">",
+      "        <td></td><td colspan=\"3\">",
+      "          <ul class=\"tests\">",
+      ( $r.tests
+        | sort_by(if .result=="FAIL" then 0 elif .result=="WARN" then 1 elif .result=="PASS" then 3 else 2 end)
+        | .[]
+        | "            <li class=\"\(cls(.result))\"><span class=\"g\">\(gly(.result))</span><span class=\"id\">\(.id // "" | esc)</span><span>\(.label // .name // "" | esc)</span></li>" ),
+      "          </ul>",
+      "        </td>",
+      "      </tr>" )
+   else empty end)
+' "$validate_f"
+
+cat <<'EOD'
+    </tbody>
+  </table>
+</section>
+EOD
+
+# ---- what needs action ----
+echo '<section>'
+local act_total=0
+local act_body=""
+act_body=$(
+    # Failures from the validator, blocker-first
+    jq -r '
+      def esc: tostring | gsub("&";"\u0026amp;") | gsub("<";"\u0026lt;") | gsub(">";"\u0026gt;");
+      (.failures // [])[]
+      | "  <li class=\"fail blocker\"><span class=\"g\">\u2717</span><span class=\"lbl\">Blocker</span><span>\(.layer // "" | esc): \(.label // "" | esc)</span></li>"
+    ' "$validate_f" 2>/dev/null
+    # Manual actions recorded by the restore
+    if [ -n "$manual_f" ] && [ -r "$manual_f" ]; then
+        grep -vE '^\s*$' "$manual_f" | while IFS= read -r line; do
+            cat_part=$(printf '%s' "$line" | sed -n 's/^\[\([^]]*\)\].*/\1/p')
+            txt=$(printf '%s' "$line" | sed -e 's/^\[[^]]*\][[:space:]]*//')
+            printf '  <li class="warn"><span class="g">!</span><span class="lbl">%s</span><span>%s</span></li>\n' \
+                   "$(esc "${cat_part:-Manual}")" "$(esc "$txt")"
+        done
+    fi
+)
+act_total=$(printf '%s' "$act_body" | grep -c '<li' || true)
+cat <<EOD
+  <h2>What needs action <span class="note">${act_total} item(s)</span></h2>
+EOD
+if [ "${act_total:-0}" -gt 0 ]; then
+    echo '  <ul class="acts">'
+    printf '%s\n' "$act_body"
+    echo '  </ul>'
+else
+    echo '  <div class="none-msg">Nothing outstanding from the validator or the restore.</div>'
+fi
+echo '</section>'
+
+# ---- footer ----
+cat <<EOD
+<footer>
+  <div>Generated ${now_human} by ${SCRIPT} ${VERSION}</div>
+  <div>Sources: $(esc "$(basename "$validate_f")")$( [ -n "$assess_f" ] && printf ' · %s' "$(esc "$(basename "$assess_f")")" )$( [ -n "$phases_f" ] && printf ' · %s' "$(esc "$(basename "$phases_f")")" )$( [ -n "$rto_in" ] && printf ' · rto' )</div>
+EOD
+if [ -n "$redact" ]; then
+    echo '  <div class="warnbox">Redacted: account ids, resource ids, phone numbers and email addresses are masked. Instance aliases are retained so the page still identifies its subject.</div>'
+else
+    echo '  <div class="warnbox">⚠ Contains instance and account identifiers. This is a local file — do not publish or commit it. Regenerate with --redact before screen-sharing.</div>'
+fi
+cat <<'EOD'
+</footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ----------------------------------------------------------------
+     Live elapsed timer — WIRED BUT NOT DISPLAYED.
+
+     The data path is complete: the generator emits data-start (epoch
+     seconds) on any phase whose state is "running", alongside a hidden
+     <span class="elapsed">. Flipping SHOW_LIVE_TIMER to true is the only
+     change needed to display a ticking duration; no generator change.
+
+     Left off for now by request.
+     ---------------------------------------------------------------- */
+  var SHOW_LIVE_TIMER = false;
+
+  function fmt(sec) {
+    var h = Math.floor(sec / 3600),
+        m = Math.floor((sec % 3600) / 60),
+        s = Math.floor(sec % 60);
+    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function tickTimers() {
+    var now = Date.now() / 1000;
+    var running = document.querySelectorAll(".ph.running[data-start]");
+    for (var i = 0; i < running.length; i++) {
+      var el = running[i];
+      var start = parseInt(el.getAttribute("data-start"), 10);
+      if (!start) continue;
+      var out = el.querySelector(".elapsed");
+      var fixed = el.querySelector(".fixed");
+      if (!out) continue;
+      out.textContent = fmt(Math.max(0, now - start));
+      out.hidden = false;
+      if (fixed) fixed.hidden = true;
+    }
+  }
+
+  if (SHOW_LIVE_TIMER) {
+    tickTimers();
+    setInterval(tickTimers, 1000);
+  }
+
+  /* ---------------- freshness ----------------
+     The page is static with inlined data, so it can only be as current
+     as the last generator run. Say how old it is rather than implying
+     it is live — a frozen page that looks live is worse than no page. */
+  var GENERATED_AT = Date.now() / 1000;
+  var REFRESH_SECS = parseInt(document.documentElement.getAttribute("data-refresh") || "0", 10);
+
+  function freshness() {
+    var age = Math.floor(Date.now() / 1000 - GENERATED_AT);
+    var txt = document.getElementById("freshtext");
+    var dot = document.getElementById("freshdot");
+    if (!txt) return;
+    txt.textContent = age < 5 ? "updated just now" : "updated " + age + "s ago";
+    if (dot && REFRESH_SECS > 0 && age > REFRESH_SECS * 2) {
+      dot.className = "dot stale";
+      txt.textContent = "stale — " + age + "s since last update";
+    }
+  }
+  freshness();
+  setInterval(freshness, 1000);
+
+  /* ---------------- expand / collapse ---------------- */
+  var rows = document.querySelectorAll("tr.lyr.has-detail");
+  for (var j = 0; j < rows.length; j++) {
+    rows[j].addEventListener("click", function () {
+      var id = this.getAttribute("data-row");
+      var d = document.querySelector('tr.detail[data-for="' + id + '"]');
+      if (!d) return;
+      d.classList.toggle("open");
+      var c = this.querySelector(".caret");
+      if (c) c.textContent = d.classList.contains("open") ? "\u25be" : "\u25b8";
+    });
+  }
+})();
+</script>
+</body>
+</html>
+EOD
+
+} | redact_stream > "$out_f.tmp" && mv "$out_f.tmp" "$out_f"
+
+# Record the refresh interval where the freshness checker can read it
+if [ "$refresh" -gt 0 ]; then
+    sed -i.bak -e "s|<html lang=\"en\">|<html lang=\"en\" data-refresh=\"$refresh\">|" "$out_f" && rm -f "$out_f.bak"
+fi
+
+echo "$out_f"
+}
+
+############################################################
+# Run once, or watch
+############################################################
+
+if [ -n "$watch" ]; then
+    [ "$refresh" -lt 1 ] && { echo "Error: --watch needs --refresh >= 1" >&2; exit 1; }
+    echo "Watching: regenerating $out_f every ${refresh}s. Ctrl-C to stop."
+    trap 'echo; echo "Stopped."; exit 0' INT TERM
+    while :; do
+        build > /dev/null
+        printf '\r  %s  regenerated  ' "$(date -u +%H:%M:%S)"
+        sleep "$refresh"
+    done
+else
+    out=$(build)
+    echo "Wrote $out"
+    [ -z "$redact" ] && echo "Note: contains real identifiers. Use --redact before sharing."
+fi
