@@ -1,0 +1,464 @@
+#!/bin/bash
+
+############################################################
+#
+# connect_assess — DR Resilience Assessment
+#
+# Static analysis of contact flows to identify blocks that
+# will fail ungracefully if their external dependencies
+# (Lambda, Lex, modules) are not available on the target.
+#
+# No AWS credentials required — runs against local backup files.
+#
+
+VERSION=1.0.0
+
+USAGE=$(cat <<EOD
+Usage: $(basename $0) [-?jv] flow_file [flow_file...]
+       $(basename $0) [-?jv] -d backup_dir
+
+    Assess contact flow resilience for DR scenarios.
+    Identifies blocks with external dependencies and traces
+    their error/fallback paths to determine if the flow
+    degrades gracefully (reaches a queue) or fails hard
+    (disconnects or dead-ends).
+
+    flow_file       One or more flow JSON files to assess
+    -d backup_dir   Assess all flow_*.json files in a backup directory
+    -j              JSON output mode
+    -v              Show version
+    -?              Help
+
+    Exit codes:
+      0  All assessed blocks degrade gracefully (or no deps found)
+      1  One or more blocks do NOT degrade gracefully
+EOD
+)
+
+# --- Helpers ---
+
+version() { echo "$(basename $0) $VERSION"; exit 0; }
+usage()   { echo "$USAGE"; exit 0; }
+
+# Terminal types that represent "safe" outcomes (caller reaches an agent)
+SAFE_TERMINALS="TransferContactToQueue|TransferToQueue"
+# Terminal types that represent "unsafe" outcomes (caller dropped)
+UNSAFE_TERMINALS="DisconnectParticipant"
+
+# Block types that have external dependencies
+DEP_TYPES="InvokeLambdaFunction|ConnectParticipantWithLexBot|GetCustomerInput|InvokeFlowModule|TransferContactToFlow"
+# Block types that reference internal resources that might be missing (prompts)
+# These get classified as "degraded" rather than "not_graceful"
+PROMPT_TYPES="MessageParticipant"
+
+# --- Parse arguments ---
+
+json_output=
+backup_dir=
+while getopts "?jvd:" arg; do
+    case "$arg" in
+        j) json_output=1;;
+        v) version;;
+        d) backup_dir=$OPTARG;;
+        *) usage;;
+    esac
+done
+shift $((OPTIND-1))
+
+# Collect flow files
+flow_files=()
+if [ -n "$backup_dir" ]; then
+    if [ ! -d "$backup_dir" ]; then
+        echo "ERROR: Directory not found: $backup_dir" >&2
+        exit 2
+    fi
+    while IFS= read -r f; do
+        flow_files+=("$f")
+    done < <(find "$backup_dir" -maxdepth 1 -name "flow_*.json" -type f | sort)
+elif [ $# -gt 0 ]; then
+    flow_files=("$@")
+else
+    usage
+fi
+
+if [ ${#flow_files[@]} -eq 0 ]; then
+    echo "No flow files found." >&2
+    exit 2
+fi
+
+# --- Core: extract flow content from a file ---
+# Handles both formats:
+#   1. Direct flow JSON (has .Actions array at top level)
+#   2. Connect describe-contact-flow format (has .Content as string)
+
+extract_flow_json() {
+    local file="$1"
+    local content
+    content=$(cat "$file")
+
+    # Check if it has a top-level Actions array (direct flow format)
+    if echo "$content" | jq -e '.Actions' >/dev/null 2>&1; then
+        echo "$content"
+        return
+    fi
+
+    # Check if it has a Content field (describe-contact-flow format)
+    local inner
+    inner=$(echo "$content" | jq -r '.Content // empty' 2>/dev/null)
+    if [ -n "$inner" ]; then
+        echo "$inner"
+        return
+    fi
+
+    # Can't parse
+    echo ""
+}
+
+# --- Core: trace a path from a starting block to a terminal ---
+# Returns: "graceful", "not_graceful", "cycle", "dead_end"
+# Uses visited-set to detect cycles (max 100 hops as safety net)
+#
+# $3 (optional): the originating dependency block ID. If the trace
+# reaches a block that is itself a dependency type, we follow its
+# ERROR path (because in a DR scenario that dep is also unavailable).
+
+trace_path() {
+    local flow_json="$1"
+    local start_block="$2"
+    local origin_block="${3:-}"
+    local visited=""
+    local current="$start_block"
+    local max_hops=100
+    local hops=0
+
+    while [ $hops -lt $max_hops ]; do
+        hops=$((hops + 1))
+
+        # Check if we've visited this block (cycle detection)
+        if echo "$visited" | grep -qF "|${current}|" 2>/dev/null; then
+            echo "cycle"
+            return
+        fi
+        visited="${visited}|${current}|"
+
+        # Get the block
+        local block
+        block=$(echo "$flow_json" | jq -r ".Actions[] | select(.Identifier == \"$current\")" 2>/dev/null)
+
+        if [ -z "$block" ] || [ "$block" = "null" ]; then
+            echo "dead_end"
+            return
+        fi
+
+        # Check block type for terminal classification
+        local block_type
+        block_type=$(echo "$block" | jq -r '.Type' 2>/dev/null)
+
+        if echo "$block_type" | grep -qE "^($SAFE_TERMINALS)$"; then
+            echo "graceful"
+            return
+        fi
+
+        if echo "$block_type" | grep -qE "^($UNSAFE_TERMINALS)$"; then
+            echo "not_graceful"
+            return
+        fi
+
+        # If this block is itself a dependency type (and not the first hop),
+        # follow its error path instead of success path (it will also fail in DR)
+        if [ "$current" != "$start_block" ] && echo "$block_type" | grep -qE "^($DEP_TYPES)$"; then
+            local dep_error
+            dep_error=$(echo "$block" | jq -r '.Transitions.Errors[0].NextAction // empty' 2>/dev/null)
+            if [ -n "$dep_error" ]; then
+                current="$dep_error"
+                continue
+            else
+                # No error handler on this chained dep block
+                echo "not_graceful"
+                return
+            fi
+        fi
+
+        # Follow the NextAction (success/default path)
+        local next
+        next=$(echo "$block" | jq -r '.Transitions.NextAction // empty' 2>/dev/null)
+
+        if [ -z "$next" ]; then
+            # No outbound transition
+            local has_any
+            has_any=$(echo "$block" | jq -r '.Transitions | length' 2>/dev/null)
+            if [ -z "$has_any" ] || [ "$has_any" = "0" ]; then
+                echo "dead_end"
+                return
+            fi
+            echo "dead_end"
+            return
+        fi
+
+        current="$next"
+    done
+
+    # Safety: exceeded max hops
+    echo "dead_end"
+}
+
+# --- Core: assess a single flow ---
+# Returns JSON array of findings
+
+assess_flow() {
+    local file="$1"
+    local flow_json
+    flow_json=$(extract_flow_json "$file")
+
+    if [ -z "$flow_json" ]; then
+        echo "[]"
+        return
+    fi
+
+    # Check for empty actions
+    local action_count
+    action_count=$(echo "$flow_json" | jq '.Actions | length' 2>/dev/null)
+    if [ -z "$action_count" ] || [ "$action_count" = "0" ]; then
+        echo "[]"
+        return
+    fi
+
+    # Find blocks with external dependencies
+    local findings="[]"
+    local dep_blocks
+    dep_blocks=$(echo "$flow_json" | jq -r ".Actions[] | select(.Type | test(\"$DEP_TYPES\")) | .Identifier" 2>/dev/null)
+
+    # Also find prompt blocks that reference a PromptId (potential missing prompts)
+    local prompt_blocks
+    prompt_blocks=$(echo "$flow_json" | jq -r ".Actions[] | select(.Type == \"MessageParticipant\" and .Parameters.PromptId != null) | .Identifier" 2>/dev/null)
+
+    # Combine (dep_blocks may be empty)
+    local all_dep_blocks=""
+    if [ -n "$dep_blocks" ]; then
+        all_dep_blocks="$dep_blocks"
+    fi
+    if [ -n "$prompt_blocks" ]; then
+        if [ -n "$all_dep_blocks" ]; then
+            all_dep_blocks="${all_dep_blocks}
+${prompt_blocks}"
+        else
+            all_dep_blocks="$prompt_blocks"
+        fi
+    fi
+
+    if [ -z "$all_dep_blocks" ]; then
+        echo "[]"
+        return
+    fi
+
+    while IFS= read -r block_id; do
+        [ -z "$block_id" ] && continue
+
+        local block
+        block=$(echo "$flow_json" | jq -r ".Actions[] | select(.Identifier == \"$block_id\")" 2>/dev/null)
+        local block_type
+        block_type=$(echo "$block" | jq -r '.Type' 2>/dev/null)
+
+        # Determine the dependency reference
+        local dep_ref=""
+        local is_prompt=0
+        case "$block_type" in
+            InvokeLambdaFunction)
+                dep_ref=$(echo "$block" | jq -r '.Parameters.LambdaFunctionARN // empty' 2>/dev/null)
+                ;;
+            ConnectParticipantWithLexBot|GetCustomerInput)
+                dep_ref=$(echo "$block" | jq -r '.Parameters.LexV2Bot.AliasArn // .Parameters.LexBot.Name // empty' 2>/dev/null)
+                ;;
+            InvokeFlowModule)
+                dep_ref=$(echo "$block" | jq -r '.Parameters.FlowModuleId // empty' 2>/dev/null)
+                ;;
+            TransferContactToFlow)
+                dep_ref=$(echo "$block" | jq -r '.Parameters.ContactFlowId // empty' 2>/dev/null)
+                ;;
+            MessageParticipant)
+                dep_ref=$(echo "$block" | jq -r '.Parameters.PromptId // empty' 2>/dev/null)
+                is_prompt=1
+                ;;
+        esac
+
+        # --- Check 1: Error path ---
+        local error_target
+        error_target=$(echo "$block" | jq -r '.Transitions.Errors[0].NextAction // empty' 2>/dev/null)
+
+        local error_classification="no_error_handler"
+        local error_terminal=""
+        if [ -n "$error_target" ]; then
+            # If error path points back to self, it's a cycle
+            if [ "$error_target" = "$block_id" ]; then
+                error_classification="cycle"
+            else
+                error_classification=$(trace_path "$flow_json" "$error_target" "$block_id")
+            fi
+            error_terminal="$error_target"
+        fi
+
+        # --- Check 2: Default/no-match path (for Lambda blocks) ---
+        # If the Lambda succeeds but returns empty data, the NEXT block
+        # (usually a Compare/Branch) may fall to its default path.
+        local default_classification="n/a"
+        local default_detail=""
+
+        if [ "$block_type" = "InvokeLambdaFunction" ]; then
+            local success_target
+            success_target=$(echo "$block" | jq -r '.Transitions.NextAction // empty' 2>/dev/null)
+            if [ -n "$success_target" ]; then
+                local next_block
+                next_block=$(echo "$flow_json" | jq -r ".Actions[] | select(.Identifier == \"$success_target\")" 2>/dev/null)
+                local next_type
+                next_type=$(echo "$next_block" | jq -r '.Type // empty' 2>/dev/null)
+
+                # If the next block is a Compare/Branch, check its default path
+                if [ "$next_type" = "Compare" ] || [ "$next_type" = "CheckAttribute" ]; then
+                    # The default path is Transitions.NextAction (fires when no conditions match
+                    # AND no NoMatchingCondition error is defined, OR it's the explicit default)
+                    local has_nomatch_error
+                    has_nomatch_error=$(echo "$next_block" | jq -r '.Transitions.Errors[]? | select(.ErrorType == "NoMatchingCondition") | .NextAction' 2>/dev/null)
+
+                    if [ -n "$has_nomatch_error" ]; then
+                        # NoMatchingCondition handler exists — trace it
+                        default_classification=$(trace_path "$flow_json" "$has_nomatch_error")
+                        default_detail="NoMatchingCondition→$has_nomatch_error"
+                    else
+                        # No NoMatchingCondition handler — default NextAction fires
+                        local compare_default
+                        compare_default=$(echo "$next_block" | jq -r '.Transitions.NextAction // empty' 2>/dev/null)
+                        if [ -n "$compare_default" ]; then
+                            default_classification=$(trace_path "$flow_json" "$compare_default")
+                            default_detail="default→$compare_default"
+                        fi
+                    fi
+                fi
+            fi
+        fi
+
+        # --- Classify overall ---
+        local classification
+        if [ "$is_prompt" = "1" ]; then
+            # Prompts are always "degraded" — they won't crash the flow,
+            # but the caller won't hear the expected audio
+            classification="degraded"
+        elif [ "$error_classification" = "no_error_handler" ]; then
+            classification="not_graceful"
+        elif [ "$error_classification" = "graceful" ]; then
+            # Error path is safe, but check default path for Lambda blocks
+            if [ "$default_classification" = "not_graceful" ] || [ "$default_classification" = "dead_end" ]; then
+                classification="not_graceful"
+            else
+                classification="graceful"
+            fi
+        elif [ "$error_classification" = "not_graceful" ] || [ "$error_classification" = "dead_end" ] || [ "$error_classification" = "cycle" ]; then
+            classification="not_graceful"
+        else
+            classification="not_graceful"
+        fi
+
+        # Build finding JSON
+        local finding
+        finding=$(jq -n \
+            --arg block "$block_id" \
+            --arg type "$block_type" \
+            --arg dep "$dep_ref" \
+            --arg err_class "$error_classification" \
+            --arg err_target "$error_terminal" \
+            --arg def_class "$default_classification" \
+            --arg def_detail "$default_detail" \
+            --arg class "$classification" \
+            '{block: $block, type: $type, dependency: $dep, error_path: $err_class, error_target: $err_target, default_path: $def_class, default_detail: $def_detail, classification: $class}')
+
+        findings=$(echo "$findings" | jq --argjson f "$finding" '. + [$f]')
+
+    done <<< "$all_dep_blocks"
+
+    echo "$findings"
+}
+
+# --- Main ---
+
+total_graceful=0
+total_not_graceful=0
+total_degraded=0
+total_blocks=0
+total_flows=0
+all_results="[]"
+
+for file in "${flow_files[@]}"; do
+    flow_name=$(basename "$file" .json | sed 's/^flow_//' | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || basename "$file" .json | sed 's/^flow_//')
+
+    findings=$(assess_flow "$file")
+    finding_count=$(echo "$findings" | jq 'length' 2>/dev/null)
+    finding_count=${finding_count:-0}
+
+    if [ "$finding_count" -eq 0 ]; then
+        continue
+    fi
+
+    total_flows=$((total_flows + 1))
+
+    # Count classifications
+    graceful=$(echo "$findings" | jq '[.[] | select(.classification == "graceful")] | length')
+    not_graceful=$(echo "$findings" | jq '[.[] | select(.classification == "not_graceful")] | length')
+    degraded=$(echo "$findings" | jq '[.[] | select(.classification == "degraded")] | length')
+
+    total_graceful=$((total_graceful + graceful))
+    total_not_graceful=$((total_not_graceful + not_graceful))
+    total_degraded=$((total_degraded + degraded))
+    total_blocks=$((total_blocks + finding_count))
+
+    # Build per-flow result
+    flow_result=$(jq -n \
+        --arg name "$flow_name" \
+        --arg file "$file" \
+        --argjson findings "$findings" \
+        --argjson graceful "$graceful" \
+        --argjson not_graceful "$not_graceful" \
+        --argjson degraded "$degraded" \
+        '{flow: $name, file: $file, findings: $findings, graceful: $graceful, not_graceful: $not_graceful, degraded: $degraded}')
+
+    all_results=$(echo "$all_results" | jq --argjson r "$flow_result" '. + [$r]')
+
+    # Human-readable output
+    if [ -z "$json_output" ]; then
+        echo ""
+        echo "Flow: \"$flow_name\""
+        echo "$findings" | jq -r '.[] | "  " + (if .classification == "graceful" then "✓" elif .classification == "degraded" then "⚠" else "✗" end) + " " + .block + " (" + .type + ")" + "\n    Dependency: " + .dependency + "\n    Error path: " + .error_path + (if .error_target != "" then " → " + .error_target else "" end) + (if .default_path != "n/a" then "\n    Default path: " + .default_path + " (" + .default_detail + ")" else "" end) + "\n    Classification: " + (.classification | ascii_upcase)' 2>/dev/null
+    fi
+done
+
+# --- Output ---
+
+if [ -n "$json_output" ]; then
+    jq -n \
+        --argjson flows_assessed "$total_flows" \
+        --argjson blocks_assessed "$total_blocks" \
+        --argjson graceful "$total_graceful" \
+        --argjson not_graceful "$total_not_graceful" \
+        --argjson degraded "$total_degraded" \
+        --argjson details "$all_results" \
+        '{flows_assessed: $flows_assessed, blocks_assessed: $blocks_assessed, graceful: $graceful, not_graceful: $not_graceful, degraded: $degraded, details: $details}'
+else
+    echo ""
+    echo "━━━ Assessment Summary ━━━"
+    echo "  Flows assessed  : $total_flows"
+    echo "  Blocks assessed : $total_blocks"
+    echo "  Graceful        : $total_graceful"
+    echo "  Not graceful    : $total_not_graceful"
+    echo "  Degraded        : $total_degraded"
+
+    if [ "$total_not_graceful" -gt 0 ]; then
+        echo ""
+        echo "  ⚠ $total_not_graceful block(s) will NOT degrade gracefully."
+        echo "    These paths lead to disconnect or dead-end on dependency failure."
+    fi
+fi
+
+# Exit code
+if [ "$total_not_graceful" -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi

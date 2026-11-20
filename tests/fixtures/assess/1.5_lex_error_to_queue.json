@@ -1,0 +1,35 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "ConnectParticipantWithLexBot",
+      "Parameters": {
+        "LexV2Bot": {"AliasArn": "arn:aws:lex:us-east-1:111111111111:bot-alias/BOTID/ALIASID"}
+      },
+      "Transitions": {
+        "NextAction": "a2",
+        "Errors": [{"NextAction": "a3", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a2",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a3",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa"},
+      "Transitions": {"NextAction": "a4"}
+    },
+    {
+      "Identifier": "a4",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

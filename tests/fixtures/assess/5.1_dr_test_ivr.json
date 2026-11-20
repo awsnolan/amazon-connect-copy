@@ -1,0 +1,114 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "start-check-hours",
+  "Actions": [
+    {
+      "Identifier": "start-check-hours",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:after-hours-check",
+        "InvocationTimeLimitSeconds": "8"
+      },
+      "Transitions": {
+        "NextAction": "branch-hours",
+        "Errors": [{"NextAction": "set-queue-basic", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "branch-hours",
+      "Type": "Compare",
+      "Parameters": {"ComparisonValue": "$.External.isOpen"},
+      "Transitions": {
+        "NextAction": "after-hours-disconnect",
+        "Conditions": [
+          {"NextAction": "lookup-customer", "Condition": {"Operator": "Equals", "Operands": ["true"]}}
+        ],
+        "Errors": [{"NextAction": "set-queue-basic", "ErrorType": "NoMatchingCondition"}]
+      }
+    },
+    {
+      "Identifier": "after-hours-disconnect",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "lookup-customer",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:customer-lookup",
+        "InvocationTimeLimitSeconds": "8"
+      },
+      "Transitions": {
+        "NextAction": "set-attributes",
+        "Errors": [{"NextAction": "lex-main-menu", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "set-attributes",
+      "Type": "UpdateContactAttributes",
+      "Parameters": {
+        "Attributes": {"CustomerName": "$.External.CustomerName"},
+        "TargetContact": "Current"
+      },
+      "Transitions": {
+        "NextAction": "lex-main-menu",
+        "Errors": [{"NextAction": "lex-main-menu", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "lex-main-menu",
+      "Type": "ConnectParticipantWithLexBot",
+      "Parameters": {
+        "LexV2Bot": {"AliasArn": "arn:aws:lex:us-east-1:111111111111:bot-alias/BOTID/ALIASID"}
+      },
+      "Transitions": {
+        "NextAction": "set-queue-basic",
+        "Conditions": [
+          {"NextAction": "set-queue-basic", "Condition": {"Operator": "Equals", "Operands": ["CheckBalance"]}},
+          {"NextAction": "set-queue-inbound", "Condition": {"Operator": "Equals", "Operands": ["SpeakToAgent"]}}
+        ],
+        "Errors": [
+          {"NextAction": "set-queue-basic", "ErrorType": "NoMatchingCondition"},
+          {"NextAction": "set-queue-basic", "ErrorType": "NoMatchingError"}
+        ]
+      }
+    },
+    {
+      "Identifier": "set-queue-basic",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa"},
+      "Transitions": {
+        "NextAction": "transfer-to-queue",
+        "Errors": [{"NextAction": "disconnect-end", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "set-queue-inbound",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/22222222-3333-4444-5555-aaaaaaaaaaaa"},
+      "Transitions": {
+        "NextAction": "transfer-to-queue",
+        "Errors": [{"NextAction": "disconnect-end", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "transfer-to-queue",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {
+        "NextAction": "disconnect-end",
+        "Errors": [
+          {"NextAction": "disconnect-end", "ErrorType": "QueueAtCapacity"},
+          {"NextAction": "disconnect-end", "ErrorType": "NoMatchingError"}
+        ]
+      }
+    },
+    {
+      "Identifier": "disconnect-end",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

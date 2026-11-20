@@ -1,0 +1,57 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {"LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:func-a"},
+      "Transitions": {
+        "NextAction": "a2",
+        "Errors": [{"NextAction": "a5", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a2",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {"LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:func-b"},
+      "Transitions": {
+        "NextAction": "a3",
+        "Errors": [{"NextAction": "a6", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a3",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {"LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:func-c"},
+      "Transitions": {
+        "NextAction": "a4",
+        "Errors": [{"NextAction": "a5", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a4",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a5",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa"},
+      "Transitions": {"NextAction": "a7"}
+    },
+    {
+      "Identifier": "a6",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a7",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

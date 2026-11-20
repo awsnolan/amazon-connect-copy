@@ -1,0 +1,22 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "TransferContactToFlow",
+      "Parameters": {
+        "ContactFlowId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/contact-flow/99999999-9999-9999-9999-999999999999"
+      },
+      "Transitions": {
+        "NextAction": "a2"
+      }
+    },
+    {
+      "Identifier": "a2",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

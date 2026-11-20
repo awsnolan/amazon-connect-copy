@@ -1,0 +1,44 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {"LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:missing-func"},
+      "Transitions": {
+        "NextAction": "a14",
+        "Errors": [{"NextAction": "a2", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {"Identifier": "a2", "Type": "MessageParticipant", "Parameters": {"Text": "Step 1"}, "Transitions": {"NextAction": "a3"}},
+    {"Identifier": "a3", "Type": "MessageParticipant", "Parameters": {"Text": "Step 2"}, "Transitions": {"NextAction": "a4"}},
+    {"Identifier": "a4", "Type": "MessageParticipant", "Parameters": {"Text": "Step 3"}, "Transitions": {"NextAction": "a5"}},
+    {"Identifier": "a5", "Type": "MessageParticipant", "Parameters": {"Text": "Step 4"}, "Transitions": {"NextAction": "a6"}},
+    {"Identifier": "a6", "Type": "MessageParticipant", "Parameters": {"Text": "Step 5"}, "Transitions": {"NextAction": "a7"}},
+    {"Identifier": "a7", "Type": "MessageParticipant", "Parameters": {"Text": "Step 6"}, "Transitions": {"NextAction": "a8"}},
+    {"Identifier": "a8", "Type": "MessageParticipant", "Parameters": {"Text": "Step 7"}, "Transitions": {"NextAction": "a9"}},
+    {"Identifier": "a9", "Type": "MessageParticipant", "Parameters": {"Text": "Step 8"}, "Transitions": {"NextAction": "a10"}},
+    {"Identifier": "a10", "Type": "MessageParticipant", "Parameters": {"Text": "Step 9"}, "Transitions": {"NextAction": "a11"}},
+    {"Identifier": "a11", "Type": "MessageParticipant", "Parameters": {"Text": "Step 10"}, "Transitions": {"NextAction": "a12"}},
+    {"Identifier": "a12", "Type": "MessageParticipant", "Parameters": {"Text": "Step 11"}, "Transitions": {"NextAction": "a13"}},
+    {
+      "Identifier": "a13",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa"},
+      "Transitions": {"NextAction": "a15"}
+    },
+    {
+      "Identifier": "a14",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a15",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

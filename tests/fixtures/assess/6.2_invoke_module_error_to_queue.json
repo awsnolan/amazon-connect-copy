@@ -1,0 +1,35 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "InvokeFlowModule",
+      "Parameters": {
+        "FlowModuleId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/flow-module/99999999-9999-9999-9999-999999999999"
+      },
+      "Transitions": {
+        "NextAction": "a3",
+        "Errors": [{"NextAction": "a2", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a2",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa"},
+      "Transitions": {"NextAction": "a4"}
+    },
+    {
+      "Identifier": "a3",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a4",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

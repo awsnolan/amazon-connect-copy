@@ -1,0 +1,40 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:missing-func"
+      },
+      "Transitions": {
+        "NextAction": "a2",
+        "Errors": [{"NextAction": "a4", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a2",
+      "Type": "Compare",
+      "Parameters": {"ComparisonValue": "$.External.isOpen"},
+      "Transitions": {
+        "NextAction": "a4",
+        "Conditions": [
+          {"NextAction": "a3", "Condition": {"Operator": "Equals", "Operands": ["true"]}}
+        ]
+      }
+    },
+    {
+      "Identifier": "a3",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a4",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}

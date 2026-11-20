@@ -1,0 +1,41 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "a1",
+  "Actions": [
+    {
+      "Identifier": "a1",
+      "Type": "InvokeLambdaFunction",
+      "Parameters": {
+        "LambdaFunctionARN": "arn:aws:lambda:us-east-1:111111111111:function:missing-func"
+      },
+      "Transitions": {
+        "NextAction": "a5",
+        "Errors": [{"NextAction": "a2", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Identifier": "a2",
+      "Type": "MessageParticipant",
+      "Parameters": {"Text": "Please hold."},
+      "Transitions": {"NextAction": "a3"}
+    },
+    {
+      "Identifier": "a3",
+      "Type": "UpdateContactTargetQueue",
+      "Parameters": {"QueueId": "arn:aws:connect:us-east-1:111111111111:instance/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/queue/11111111-2222-3333-4444-aaaaaaaaaaaa"},
+      "Transitions": {"NextAction": "a4"}
+    },
+    {
+      "Identifier": "a4",
+      "Type": "TransferContactToQueue",
+      "Parameters": {},
+      "Transitions": {}
+    },
+    {
+      "Identifier": "a5",
+      "Type": "DisconnectParticipant",
+      "Parameters": {},
+      "Transitions": {}
+    }
+  ]
+}
