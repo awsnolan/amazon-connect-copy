@@ -1318,6 +1318,96 @@ else
 fi
 
 ###############################################################################
+# Test Suite 18: Restore Section Ordering (B5 regression guard)
+#
+# Associations must not be replayed before the resources they reference exist.
+# These tests fail if that ordering regresses.
+###############################################################################
+
+section_start "Suite 18: Restore Section Ordering (B5)"
+
+HOURS_SRC="$BIN_DIR/lib/restore/hours.sh"
+FEATURES_SRC="$BIN_DIR/lib/restore/features.sh"
+
+test_start "hours.sh creates hours of operation before replaying overrides"
+create_ln=$(grep -n '^# Hours of operations$' "$HOURS_SRC" | head -1 | cut -d: -f1)
+override_ln=$(grep -n '^# Hours of Operations Override Replay$' "$HOURS_SRC" | head -1 | cut -d: -f1)
+if [ -n "$create_ln" ] && [ -n "$override_ln" ] && [ "$create_ln" -lt "$override_ln" ]; then
+    test_pass
+else
+    test_fail "Override replay (line ${override_ln:-?}) must come after hours creation (line ${create_ln:-?})"
+fi
+
+test_start "queue-quick-connect associations are not in hours.sh"
+if grep -q 'associate-queue-quick-connects' "$HOURS_SRC"; then
+    test_fail "hours.sh runs as section 3; quick connects do not exist until section 7"
+else
+    test_pass
+fi
+
+test_start "queue-quick-connect associations follow quick connect creation in features.sh"
+qc_create_ln=$(grep -n 'create-quick-connect' "$FEATURES_SRC" | head -1 | cut -d: -f1)
+assoc_ln=$(grep -n 'associate-queue-quick-connects' "$FEATURES_SRC" | head -1 | cut -d: -f1)
+if [ -n "$qc_create_ln" ] && [ -n "$assoc_ln" ] && [ "$qc_create_ln" -lt "$assoc_ln" ]; then
+    test_pass
+else
+    test_fail "Association (line ${assoc_ln:-missing}) must follow create-quick-connect (line ${qc_create_ln:-missing})"
+fi
+
+test_start "association and override failures are reported, not suppressed"
+suppressed=""
+grep -A6 'aws_connect associate-queue-quick-connects' "$FEATURES_SRC" | grep -q '2>/dev/null || true' && suppressed="assoc"
+grep -A6 'aws_connect create-hours-of-operation-override' "$HOURS_SRC" | grep -q '2>/dev/null || true' && suppressed="$suppressed override"
+if [ -z "$suppressed" ]; then
+    test_pass
+else
+    test_fail "Suppressed calls hide failures from the operator:$suppressed"
+fi
+
+test_start "unresolvable target queue raises a manual action instead of skipping"
+if grep -A4 'if \[ -z "\$queue_id_b" \]; then' "$FEATURES_SRC" | grep -q 'manual_action'; then
+    test_pass
+else
+    test_fail "A queue missing on the target must be reported, not silently skipped"
+fi
+
+test_start "restore step numbering never exceeds the total"
+if [ -d "$OUTPUT_DIR/helper" ]; then
+    steps=$(NO_COLOR=1 "$BIN_DIR/connect_restore" -d -e "$OUTPUT_DIR/helper" 2>&1 \
+            | grep -oE '[0-9]+/[0-9]+ [A-Za-z]' | cut -d' ' -f1)
+    bad_steps=""
+    for s in $steps; do
+        cur=${s%%/*}; tot=${s##*/}
+        [ "$cur" -gt "$tot" ] && bad_steps="$bad_steps $s"
+    done
+    if [ -n "$steps" ] && [ -z "$bad_steps" ]; then
+        test_pass
+    elif [ -z "$steps" ]; then
+        test_skip "no step headers captured"
+    else
+        test_fail "step counter exceeded total:$bad_steps"
+    fi
+else
+    test_skip "helper directory not available"
+fi
+
+test_start "dry-run emits hours of operation before overrides"
+if [ -d "$OUTPUT_DIR/helper" ]; then
+    dryout=$(NO_COLOR=1 "$BIN_DIR/connect_restore" -d -e "$OUTPUT_DIR/helper" 2>&1)
+    h_ln=$(printf '%s\n' "$dryout" | grep -n 'Hours of operations' | head -1 | cut -d: -f1)
+    o_ln=$(printf '%s\n' "$dryout" | grep -n 'Hours of Operation Overrides' | head -1 | cut -d: -f1)
+    if [ -n "$h_ln" ] && [ -n "$o_ln" ] && [ "$h_ln" -lt "$o_ln" ]; then
+        test_pass
+    elif [ -z "$o_ln" ] || [ -z "$h_ln" ]; then
+        test_skip "one or both blocks absent from this fixture run"
+    else
+        test_fail "overrides (line $o_ln) emitted before hours (line $h_ln)"
+    fi
+else
+    test_skip "helper directory not available"
+fi
+
+###############################################################################
 # Results Summary
 ###############################################################################
 

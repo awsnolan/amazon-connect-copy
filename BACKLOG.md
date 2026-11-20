@@ -17,8 +17,9 @@ written in August sat uncommitted for four months.
 | B2 | Commit the August `connect_assess` work | **Done** (`e7bd724`) |
 | B3 | Mark `DR_MODES_SPEC.md` as unimplemented, or implement it | **Done** — marked DRAFT / NOT IMPLEMENTED |
 | B4 | Terminology refresh for the August 2026 platform renames | Open |
-| B5 | Restore ordering defects | Open |
+| B5 | Restore ordering defects | **Done** |
 | B6 | Stale limitation text in README and operator guide | Open |
+| B7 | 6 tests pass `--no-color` to `connect_restore`, which rejects it | Open |
 
 **B4 — terminology.** Amazon Connect renamed features on 2026-08-04. Current
 AWS documentation uses the new names throughout, so repository vocabulary is
@@ -33,13 +34,42 @@ now inconsistent with it.
 Affects `README.md`, `DR_VALIDATION_SPEC.md`, `DR_OPERATOR_GUIDE.md`,
 validation layer names, and script output.
 
-**B5 — restore ordering.** Two sequences replay associations before their
-dependencies exist, so a single run can leave references unset and require a
-second pass:
+**B5 — restore ordering. Done.** Two sequences replayed associations before
+their dependencies existed, so a single run left references unset and reported
+success anyway.
 
-- Queue-to-quick-connect associations replay at the start of the hours section,
-  before missing queues and quick connects are created.
-- Hours overrides replay before newly missing hours of operation are created.
+Root cause was not the ordering itself but that both blocks resolved target IDs
+from the target's *pre-restore* backup manifest. On a fresh target the resource
+was absent, so the code hit a silent `continue` and never reached the API.
+
+Fixed:
+
+- Queue-to-quick-connect associations moved from `hours.sh` (section 3) to
+  `features.sh`, immediately after quick connects are created (section 7).
+  By then `queues.json` has been refreshed by `queues.sh` and `helper.sed`
+  holds the quick connect ID mappings.
+- Hours override replay moved below the hours create/update block in
+  `hours.sh`, which refreshes `hours.json` before the replay reads it.
+- An unresolvable target queue now raises a visible warning plus a manual
+  action, instead of `continue`.
+- Both AWS calls had `2>/dev/null || true`, which defeated the error reporting
+  already present in `aws_connect_restore` (`common.sh:186-190`). Replaced with
+  capture-and-report. The non-zero status is deliberately kept away from
+  `test $? -eq 0 || error`, because `error()` calls `exit 1` and `run_section`
+  sources each section — so an unguarded failure would abort the entire
+  restore and break the documented "re-run connect_restore" loop.
+- Also fixed `preflight.sh`, which incremented `RESTORE_STEP` twice and passed
+  four arguments to `section_header`. Output ran `2/9` to `10/9`; now `1/9` to
+  `9/9`.
+
+Guarded by test Suite 18 (7 tests). Verified by mutation: reintroducing each
+defect individually fails exactly one test.
+
+**B7 — vacuous tests.** Six call sites pass `--no-color` to
+`connect_restore`, which has no such flag and exits 2 with no output. The
+surrounding assertions are permissive, so the tests pass without exercising
+anything. Use `NO_COLOR=1` as an environment variable instead, as Suite 18
+now does. Affected lines: 407, 426, 861, 874, 889, 1290.
 
 **B6 — stale text.** README "Known Limitations" still states Cases restore is
 manual; it was automated in Phase 4 (`81f7572`). Prompt audio and Lex restore

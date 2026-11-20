@@ -129,6 +129,89 @@ fi
 
 ############################################################
 #
+# Queue → Quick Connect Associations
+#
+# This block used to live at the top of hours.sh, which runs as section 3.
+# Quick connects are not created until this section, and queues not until
+# section 4, so the associations were attempted before either side existed
+# and were skipped silently. It now runs immediately after the quick
+# connects above are created, so:
+#   - $instance_alias_dir_b/queues.json has been refreshed by queues.sh
+#   - $helper_sed contains the quick connect ID mappings
+# See BACKLOG.md item B5.
+#
+
+cat <<EOD
+
+Queue → Quick Connect Associations
+----------------------------------
+EOD
+if [ -s "$instance_alias_dir_a/queues.json" ]; then
+    jq -r ".Id + \" \" + .Name" "$instance_alias_dir_a/queues.json" |
+    dos2unix |
+    while read queue_id_a queue_name; do
+        queue_name_encoded=$(path_encode "$queue_name")
+        qc_file="$instance_alias_dir_a/queueQCs_$queue_name_encoded.json"
+        [ -f "$qc_file" ] || continue
+
+        qc_count=$(jq ".QuickConnectSummaryList | length" "$qc_file" 2>/dev/null)
+        # Nothing to associate is a normal outcome, not a problem.
+        if [ -z "$qc_count" ] || [ "$qc_count" -eq 0 ]; then
+            continue
+        fi
+
+        queue_id_b=$(sed -e's/\\"/%22/g' "$instance_alias_dir_b/queues.json" 2>/dev/null | jq -r "select(.Name == \"${queue_name//\"/%22}\") | .Id" | dos2unix)
+        # An unresolvable queue used to 'continue' silently, which is what
+        # made B5 invisible. Report it instead.
+        if [ -z "$queue_id_b" ]; then
+            echo -e "  ${C_WARN}⚠${C_RESET} Queue '$queue_name' not found on target — $qc_count quick connect(s) NOT associated" >&2
+            manual_action "Queue Quick Connects" "Queue '$queue_name' was not found on the target; associate its $qc_count quick connect(s) manually."
+            continue
+        fi
+
+        echo "Associating $qc_count quick connects to queue $queue_name"
+        qc_ids=$(jq -r ".QuickConnectSummaryList[].Id" "$qc_file" | sed -f "$helper_sed" | jq -Rs '[split("\n")[] | select(. != "")]')
+
+        cat <<EOD >> "$helper_log"
+
+$actionLead Associate quick connects to queue: $queue_name
+EOD
+        if [ -n "$dryrun" ]; then
+            cat <<EOD
+Dry-associate quick connects to queue $queue_name
+
+EOD
+            cat <<EOD >> "$helper_log"
+aws connect associate-queue-quick-connects \
+--instance-id $instance_id_b \
+--queue-id $queue_id_b \
+--quick-connect-ids $qc_ids
+EOD
+        else
+            # Report failures rather than suppressing them, while keeping the
+            # non-zero status away from the "test $? -eq 0 || error" guard
+            # below. error() calls exit 1, and run_section sources this file,
+            # so an unguarded failure would abort the whole restore. Both
+            # branches end on a zero-status command by design.
+            if aws_connect associate-queue-quick-connects \
+                    --instance-id $instance_id_b \
+                    --queue-id $queue_id_b \
+                    --quick-connect-ids "$qc_ids" > /dev/null; then
+                echo -e "  ${C_PASS}✓${C_RESET} Associated $qc_count quick connect(s) to '$queue_name'"
+            else
+                echo -e "  ${C_FAIL}✗${C_RESET} Association FAILED for queue '$queue_name' (AWS error above)" >&2
+                manual_action "Queue Quick Connects" "Associating quick connects to queue '$queue_name' failed. Re-apply in the console, or re-run connect_restore."
+            fi
+        fi
+    done
+    test $? -eq 0 || error
+else
+    echo "No queue quick connect associations to process"
+fi
+
+
+############################################################
+#
 # Agent Statuses
 #
 
