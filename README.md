@@ -56,12 +56,27 @@ permanent.
 
 ## Scripts
 
+**Core workflow**
+
 | Script | Purpose |
 |--------|---------|
 | `connect_backup` | Export a live Amazon Connect instance to local files |
 | `connect_plan` | Compare source backup vs target instance, produce a restore plan |
 | `connect_restore` | Apply the plan — create/update components on the target instance |
 | `connect_validate` | Verify the restored instance matches the backup (DR acceptance gate) |
+
+**Supporting tools**
+
+| Script | Purpose | Needs AWS? |
+|--------|---------|------------|
+| `connect_assess` | Static analysis of flow JSON: finds blocks whose external dependencies would fail ungracefully, and traces their error paths | No |
+| `connect_report` | Single-page HTML dashboard of drill status (green / amber / red / grey) | No |
+| `connect_deps_backup` | Download Lambda code and config, Lex bot definitions, prompt metadata | Yes |
+| `connect_deps_restore` | Deploy those dependencies into the target account before a restore | Yes |
+
+`connect_assess` and `connect_report` read only local files, so they run without
+credentials — useful for review, planning, and anything you want to do away from
+a live instance.
 
 ## Quick Start
 
@@ -82,7 +97,7 @@ connect_restore -d helper
 connect_restore helper
 
 # 6. Validate the restore (cross-account)
-connect_validate -m full --target <target-instance-id> source-instance
+connect_validate -m full --target "<target-instance-id>" source-instance
 ```
 
 ## What Gets Backed Up and Restored
@@ -189,7 +204,7 @@ cp -r bin/* /usr/local/bin/
 
 ```bash
 # Preflight — check target readiness (instance active, deps available, credentials working)
-connect_validate -m preflight --target <instance-id> source-backup-dir
+connect_validate -m preflight --target "<instance-id>" source-backup-dir
 
 # Local only — validate saved JSON files, no AWS calls
 connect_validate -m local source-instance
@@ -198,16 +213,16 @@ connect_validate -m local source-instance
 connect_validate -m full -p profile source-instance
 
 # Full cross-account — compare backup against a different target instance (DR acceptance)
-connect_validate -m full --target <target-id> --target-profile dr-profile source-backup-dir
+connect_validate -m full --target "<target-id>" --target-profile dr-profile source-backup-dir
 
 # JSON output for CI/CD pipelines
-connect_validate -m full -j --target <target-id> source-backup-dir
+connect_validate -m full -j --target "<target-id>" source-backup-dir
 
 # Selective — run only specific layers
-connect_validate -m full --only 0,2,10 --target <target-id> source-backup-dir
+connect_validate -m full --only 0,2,10 --target "<target-id>" source-backup-dir
 
 # Skip layers
-connect_validate -m full --skip 17 --target <target-id> source-backup-dir
+connect_validate -m full --skip 17 --target "<target-id>" source-backup-dir
 ```
 
 ## External Dependencies
@@ -231,7 +246,7 @@ will fail on live calls.
 # 1. Deploy external dependencies to DR account (Lambda, Lex, prompts)
 
 # 2. Preflight check — verify target is ready
-connect_validate -m preflight --target <target-id> source-backup-dir
+connect_validate -m preflight --target "<target-id>" source-backup-dir
 
 # 3. Back up source and target
 connect_backup -p source-profile source-instance
@@ -242,7 +257,7 @@ connect_plan source-instance target-instance helper
 connect_restore helper
 
 # 5. Validate the restore
-connect_validate -m full --target <target-id> source-backup-dir
+connect_validate -m full --target "<target-id>" source-backup-dir
 
 # 6. Complete manual actions (phone numbers, users, security profiles)
 # 7. Re-validate until PASS
@@ -259,7 +274,7 @@ configured but not serving live traffic), keep it validated daily:
 
 ```bash
 cd examples/codebuild/dr-validate-pipeline
-./deploy.sh <source-alias> <dr-instance-id> --email oncall@example.com
+./deploy.sh "$SOURCE_ALIAS" "$DR_INSTANCE_ID" --email oncall@example.com
 ```
 
 This deploys a CodeBuild pipeline that:
@@ -272,6 +287,54 @@ This deploys a CodeBuild pipeline that:
 Idle cost: ~$3-5/month. See
 [pipeline documentation](./examples/codebuild/dr-validate-pipeline/) for full
 setup options including cross-account and Route 53 integration.
+
+## Drill Dashboard
+
+`connect_report` turns validation output into a single self-contained HTML page
+showing where a DR test stands — intended for someone watching the drill rather
+than running it.
+
+```bash
+# Minimum: just the validator output
+connect_validate -m full -j --target "$DR_INSTANCE_ID" --target-profile dr-profile \
+  source-backup-dir > validate.json
+connect_report --validate validate.json
+
+# Full picture during a drill, refreshing every 20s
+connect_report --validate validate.json --assess assess.json \
+  --phases phases.tsv --rto rto_seconds --manual manual_actions.txt \
+  --target-rto 30 --refresh 20 --watch
+```
+
+Status is shown in four states, each as colour **plus** glyph and word so it
+survives colour-blindness and greyscale printing:
+
+| State | Meaning |
+|-------|---------|
+| ✓ Pass (green) | Layer passed |
+| ! Warn (amber) | Passed with warnings |
+| ✗ Fail (red) | Layer failed |
+| – Not run (grey) | Check did not run, with the reason shown |
+
+All 19 validation layers always appear. A layer absent from the JSON is listed
+as *not actioned* rather than omitted, because a missing check and a passing
+check are not the same thing.
+
+The page embeds its data, so it works from `file://` with no web server. It
+carries a `meta refresh` and reports its own age, turning amber if it goes
+stale — a frozen page that looks live is worse than no page at all.
+
+**Before screen-sharing**, regenerate with `--redact` to mask account IDs,
+resource IDs, phone numbers and email addresses. Instance aliases are kept so
+the page still identifies its subject.
+
+```bash
+connect_report --validate validate.json --redact --refresh 0 --out shared.html
+```
+
+Output contains real identifiers unless redacted. Write it under `output/`,
+which is gitignored, and do not commit it. See
+[DR_DRILL_RUNBOOK.md](./DR_DRILL_RUNBOOK.md) section 13a for the live loop.
 
 ## Useful Tips
 
