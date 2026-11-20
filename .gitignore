@@ -4,10 +4,22 @@
 # Editor / IDE
 .vscode/
 
-# Backup output directories (contain real instance data)
-# These are produced by connect_backup runs — never commit
+# Backup / restore output (contains real instance data — never commit)
+#
+# connect_backup writes a directory named after the instance alias, and
+# connect_plan writes a helper directory. These hold real account IDs,
+# instance IDs, ARNs and flow content.
+#
+# If you back up a new instance, EITHER run it under output/ (already
+# ignored below) OR add its directory name here before running git add.
+output/
+helper/
+helper.*/
+dr-solution-target/
+qs-builder-in-sydney/
 *.log
 *.var
+*.sed
 
 # SAM build artifacts
 .aws-sam/
