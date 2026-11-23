@@ -52,11 +52,13 @@ counts the type as matched **if the response is non-empty**.
 
 ---
 
-## 3. Defects
+## 3. Defects (F1–F7)
+
+Numbered **F** so they do not collide with the **D** deliverables in Section 5.
 
 Ranked by consequence.
 
-### D1 — False success on update *(critical)*
+### F1 — False success on update *(critical)*
 
 `bin/lib/restore/instance.sh:93-98` — the `update` call begins at line 93, its
 suppression is on line 97, and the unconditional success line is 98.
@@ -73,7 +75,7 @@ config — the operator is told it succeeded.
 
 This is the single most important fix in R1.
 
-### D2 — Presence-only validation *(critical)*
+### F2 — Presence-only validation *(critical)*
 
 `layer_1_instance.sh:101-108` checks only that *some* storage config exists for
 the type. It never compares `BucketName`, `BucketPrefix`, or the KMS `KeyId`.
@@ -83,7 +85,7 @@ an unencrypted bucket, **passes test 1.4**. The variable `saved_config` is
 assigned at line 94 and never read, which is likely where the comparison was
 intended to go.
 
-### D3 — Missing resource types *(high)*
+### F3 — Missing resource types *(high)*
 
 Backup covers 11 of the 13 types the API now accepts. Missing:
 
@@ -96,19 +98,19 @@ The identical list is duplicated verbatim in `layer_1_instance.sh:90`, so
 backup and validation share the same blind spot and must be edited in lockstep.
 They have already drifted from the API once.
 
-### D4 — Success inferred from empty output, not exit status *(high)*
+### F4 — Success inferred from empty output, not exit status *(high)*
 
 `restore/instance.sh:79-84` treats an empty response as "already configured".
 Any failure also produces an empty response, so a denied or invalid association
 is misclassified and routed into the update path.
 
-### D5 — AWS error text suppressed *(high)*
+### F5 — AWS error text suppressed *(high)*
 
 Both calls use `2>/dev/null`, which defeats the error reporting already present
 in `aws_connect_restore` (`common.sh:186-190`). Same defect class as B5. The
 operator cannot see *why* a storage association failed.
 
-### D6 — No proof the target can actually use the storage *(high)*
+### F6 — No proof the target can actually use the storage *(high)*
 
 Associating a storage config is a control-plane operation. Succeeding at it does
 not establish that the target account can write an object to the bucket or use
@@ -117,7 +119,7 @@ the KMS key, which are data-plane concerns. Nothing in the toolkit tests either.
 For a cross-account restore the usual blockers are the source bucket policy and
 the source KMS key policy, neither of which the toolkit creates or inspects.
 
-### D7 — Minor
+### F7 — Minor
 
 - `has_saved` uses `grep -c "\"$stype\""` against the whole file, so a type
   named inside another field's value would match.
@@ -164,9 +166,11 @@ that expressible, then verify it.**
 
 ---
 
-## 5. Proposed scope
+## 5. Proposed scope (D1–D6)
 
 ### D1 — Single source of truth for storage types
+
+*Fixes F3, F7.*
 
 Move the type list into `common.sh` as one constant consumed by backup, restore
 and validate. Add `EMAIL_MESSAGES` and
@@ -178,6 +182,8 @@ the next API addition is caught rather than silently missed.
 *Small. No behavioural risk.*
 
 ### D2 — Honest restore reporting
+
+*Fixes F1, F4, F5.*
 
 - Branch on exit status, not empty output.
 - Drop `2>/dev/null` so the wrapper's error text reaches the operator.
@@ -207,6 +213,8 @@ what to assert against.
 
 ### D4 — Deep validation
 
+*Fixes F2.*
+
 Rewrite test 1.4 to compare, per type: presence, `BucketName`, `BucketPrefix`,
 `StorageType`, `EncryptionType` and KMS `KeyId` — accounting for the remapping
 from D3 so an intentional change reads as a pass and an accidental one as a
@@ -219,6 +227,8 @@ downgrade would be a compliance regression.
 *Medium. Replaces the dead `saved_config` path.*
 
 ### D5 — Reachability probe: the actual "attach validation"
+
+*Fixes F6.*
 
 A new validation layer, or an extension of 1.4, that tests whether the target
 can really use the storage it is pointed at. Read-only by default:
