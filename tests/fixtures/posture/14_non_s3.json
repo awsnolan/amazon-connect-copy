@@ -1,0 +1,8 @@
+{
+  "collected_at": "2026-11-20T04:00:00Z",
+  "dr_region_expected": "us-west-2",
+  "configs": [
+    {"resource_type":"CONTACT_TRACE_RECORDS","storage_type":"KINESIS_STREAM","bucket":null,"prefix":"","encryption":"NONE","kms_key":null,"association_id":"a1"}
+  ],
+  "buckets": {}
+}

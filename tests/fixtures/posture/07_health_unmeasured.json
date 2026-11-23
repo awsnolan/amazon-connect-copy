@@ -1,0 +1,23 @@
+{
+  "collected_at": "2026-11-20T04:00:00Z",
+  "dr_region_expected": "us-west-2",
+  "configs": [{"resource_type":"CALL_RECORDINGS","storage_type":"S3","bucket":"amzn-s3-demo-bucket","prefix":"connect/acme/CallRecordings","encryption":"KMS","kms_key":"arn:aws:kms:ap-southeast-2:111111111111:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","association_id":"assoc-CALL_RECORDINGS"},{"resource_type":"CHAT_TRANSCRIPTS","storage_type":"S3","bucket":"amzn-s3-demo-bucket","prefix":"connect/acme/ChatTranscripts","encryption":"KMS","kms_key":"arn:aws:kms:ap-southeast-2:111111111111:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","association_id":"assoc-CHAT_TRANSCRIPTS"},{"resource_type":"SCHEDULED_REPORTS","storage_type":"S3","bucket":"amzn-s3-demo-bucket","prefix":"connect/acme/Reports","encryption":"KMS","kms_key":"arn:aws:kms:ap-southeast-2:111111111111:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","association_id":"assoc-SCHEDULED_REPORTS"}],
+  "buckets": {
+    "amzn-s3-demo-bucket": {
+      "reachable": true,
+      "region": "ap-southeast-2",
+      "error": null,
+      "versioning": "Enabled",
+      "encryption": {"algorithm":"aws:kms","key":"arn:aws:kms:ap-southeast-2:111111111111:key/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+      "object_lock": "Disabled",
+      "replication": {"Rules":[{"ID":"dr","Status":"Enabled","Priority":1,
+  "Filter":{"Prefix":"connect/"},
+  "SourceSelectionCriteria":{"SseKmsEncryptedObjects":{"Status":"Enabled"}},
+  "Destination":{"Bucket":"arn:aws:s3:::amzn-s3-demo-dr-bucket","EncryptionConfiguration":{"ReplicaKmsKeyID":"arn:aws:kms:us-west-2:111111111111:key/ffffffff-9999-8888-7777-666666666666"}},
+  "DeleteMarkerReplication":{"Status":"Disabled"}}]},
+      "replication_error": null,
+      "destinations": {"amzn-s3-demo-dr-bucket":{"reachable":true,"region":"us-west-2"}},
+      "metrics": null
+    }
+  }
+}

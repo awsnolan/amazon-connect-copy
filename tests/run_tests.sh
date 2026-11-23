@@ -1408,6 +1408,124 @@ else
 fi
 
 ###############################################################################
+# Test Suite 19: Storage Recovery Posture (R1 / D5a)
+#
+# The posture rules decide whether regional recovery of recordings and
+# transcripts is possible. Two of these cases are traps where replication
+# reads as "Enabled" but replicates nothing relevant.
+###############################################################################
+
+section_start "Suite 19: Storage Recovery Posture"
+
+POSTURE_BIN="$BIN_DIR/connect_storage_posture"
+POSTURE_FIX="$FIXTURES_DIR/posture"
+POSTURE_STUB="$OUTPUT_DIR/posture_stub"
+
+if [ ! -x "$POSTURE_BIN" ]; then
+    test_start "connect_storage_posture present"
+    test_fail "not found at $POSTURE_BIN"
+elif [ ! -d "$POSTURE_FIX" ]; then
+    test_start "posture fixtures present"
+    test_skip "run tests/make_posture_fixtures.sh first"
+else
+    mkdir -p "$POSTURE_STUB"
+    echo '{"StorageConfigs":[]}' > "$POSTURE_STUB/storage_configs.json"
+
+    # fixture | expected posture | expected exit
+    while IFS='|' read -r pf pexp pexit; do
+        [ -z "$pf" ] && continue
+        test_start "posture: $pf -> $pexp"
+        if [ ! -f "$POSTURE_FIX/$pf" ]; then
+            test_skip "fixture missing"
+            continue
+        fi
+        pout=$("$POSTURE_BIN" --facts "$POSTURE_FIX/$pf" -j "$POSTURE_STUB" 2>/dev/null)
+        prc=$?
+        pgot=$(printf '%s' "$pout" | jq -r '.overall' 2>/dev/null)
+        if [ "$pgot" != "$pexp" ]; then
+            test_fail "got '$pgot', expected '$pexp'"
+        elif [ "$prc" != "$pexit" ]; then
+            test_fail "posture correct but exit $prc, expected $pexit"
+        else
+            test_pass
+        fi
+    done <<'POSTURE_CASES'
+01_no_replication.json|LOCAL_ONLY|1
+02_kms_not_replicated.json|LOCAL_ONLY|1
+03_prefix_mismatch.json|LOCAL_ONLY|1
+04_versioning_suspended.json|LOCAL_ONLY|1
+05_regional_verified.json|REGIONAL_VERIFIED|0
+06_regional_degraded.json|REGIONAL_DEGRADED|0
+07_health_unmeasured.json|REGIONAL_CONFIGURED|0
+08_rule_disabled.json|LOCAL_ONLY|1
+09_access_denied.json|UNKNOWN|2
+10_bucket_unreachable.json|UNKNOWN|2
+11_tag_filtered.json|LOCAL_ONLY|1
+12_wrong_dr_region.json|REGIONAL_VERIFIED|0
+13_dest_unreachable.json|REGIONAL_CONFIGURED|0
+14_non_s3.json|NOT_APPLICABLE|0
+15_unencrypted_ok.json|REGIONAL_VERIFIED|0
+POSTURE_CASES
+
+    # The KMS trap must name its cause, not just report LOCAL_ONLY
+    test_start "KMS trap explains that the destination receives nothing"
+    kmsout=$("$POSTURE_BIN" --facts "$POSTURE_FIX/02_kms_not_replicated.json" -j "$POSTURE_STUB" 2>/dev/null \
+             | jq -r '.configs[0].reasons[]' 2>/dev/null)
+    if printf '%s' "$kmsout" | grep -q 'SSE-KMS' && printf '%s' "$kmsout" | grep -q 'receives nothing'; then
+        test_pass
+    else
+        test_fail "reason text does not identify the SSE-KMS cause"
+    fi
+
+    # A destination in the wrong region must still be flagged
+    test_start "destination outside the intended DR region is flagged"
+    wrout=$("$POSTURE_BIN" --facts "$POSTURE_FIX/12_wrong_dr_region.json" -j "$POSTURE_STUB" 2>/dev/null \
+            | jq -r '.configs[0].reasons[]' 2>/dev/null)
+    if printf '%s' "$wrout" | grep -q 'not the intended DR region'; then
+        test_pass
+    else
+        test_fail "region mismatch not reported"
+    fi
+
+    # An unencrypted bucket must not be penalised for lacking SSE-KMS replication
+    test_start "unencrypted bucket does not require SSE-KMS replication"
+    unenc=$("$POSTURE_BIN" --facts "$POSTURE_FIX/15_unencrypted_ok.json" -j "$POSTURE_STUB" 2>/dev/null \
+            | jq -r '.configs[0].posture' 2>/dev/null)
+    if [ "$unenc" = "REGIONAL_VERIFIED" ]; then
+        test_pass
+    else
+        test_fail "got '$unenc', expected REGIONAL_VERIFIED"
+    fi
+
+    # Report mode must state recovery scope, not just the posture token
+    test_start "report states what is and is not recoverable"
+    rep=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/01_no_replication.json" "$POSTURE_STUB" 2>&1)
+    if printf '%s' "$rep" | grep -q 'Recoverable from' && printf '%s' "$rep" | grep -q 'NOT recoverable'; then
+        test_pass
+    else
+        test_fail "report does not state recovery scope"
+    fi
+
+    test_start "posture analysis makes no AWS calls in --facts mode"
+    if grep -q 'facts_in' "$POSTURE_BIN" && \
+       ! NO_COLOR=1 AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+         "$POSTURE_BIN" --facts "$POSTURE_FIX/05_regional_verified.json" -j "$POSTURE_STUB" 2>&1 \
+         | grep -qi 'credential\|Unable to locate'; then
+        test_pass
+    else
+        test_fail "analysis appears to require AWS credentials"
+    fi
+
+    test_start "bad input produces a clean error, not a stack trace"
+    berr=$("$POSTURE_BIN" --facts /nonexistent "$POSTURE_STUB" 2>&1); brc=$?
+    if [ "$brc" -eq 3 ] && printf '%s' "$berr" | grep -q 'cannot read'; then
+        test_pass
+    else
+        test_fail "exit $brc: $(printf '%s' "$berr" | head -1)"
+    fi
+fi
+
+###############################################################################
 # Results Summary
 ###############################################################################
 

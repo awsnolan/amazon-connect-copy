@@ -1,0 +1,532 @@
+#!/bin/bash
+############################################################
+#
+# connect_storage_posture — what storage recovery is actually possible?
+#
+# Reads the S3 buckets behind an instance's storage configs and states
+# the recovery scope they support, instead of assuming one.
+#
+#   LOCAL_ONLY           loss or corruption of the instance, region intact
+#   REGIONAL_CONFIGURED  replication looks correct, health unverified
+#   REGIONAL_DEGRADED    replication correct but a backlog is present
+#   REGIONAL_VERIFIED    replication correct, destination reachable, no backlog
+#   UNKNOWN              could not read the bucket (denied, or another account)
+#
+# Two traps make a naive "is replication enabled" check misleading, and
+# this tool exists mainly to catch them:
+#
+#   1. SSE-KMS objects are NOT replicated unless the rule sets
+#      SourceSelectionCriteria.SseKmsEncryptedObjects.Status=Enabled AND
+#      supplies Destination.EncryptionConfiguration.ReplicaKmsKeyID.
+#      Without both, replication reads as Enabled everywhere while no
+#      objects reach the destination.
+#
+#   2. A rule's prefix filter must actually cover the prefix Connect
+#      writes to. A rule scoped elsewhere replicates nothing relevant
+#      while still reporting as configured.
+#
+# COLLECT and ANALYSE are separate phases. --facts feeds a pre-collected
+# facts file to the analyser, so the posture logic is testable with no
+# AWS access.
+#
+# All AWS calls are read-only. Any failure degrades that bucket to
+# UNKNOWN and never fails the run.
+#
+# Requires: jq 1.6+, bash 3.2+. AWS CLI only for collection.
+#
+############################################################
+
+VERSION=1.0.0
+SCRIPT=$(basename "$0")
+
+usage() {
+    cat <<EOD
+Usage: $SCRIPT [options] <backup_dir>
+
+    Determine what storage recovery is possible for an instance backup.
+
+    <backup_dir>       Directory produced by connect_backup
+                       (needs storage_configs.json)
+
+    -p, --profile P    AWS profile for the account owning the buckets
+    --dr-region R      Intended DR region. Flags replication that goes
+                       somewhere other than where you plan to recover.
+    --facts FILE       Skip collection; analyse this facts file instead.
+                       Used for testing and for re-reporting offline.
+    --no-metrics       Skip CloudWatch replication-health metrics
+    -o FILE            Where to write the facts file
+                       (default <backup_dir>/storage_resilience.json)
+    -j                 JSON output instead of the report
+    -v                 Version
+    -?, --help         This help
+
+Exit codes:
+    0  Every S3 config has regional recovery (CONFIGURED or better)
+    1  At least one config is LOCAL_ONLY — regional recovery not possible
+    2  Posture could not be determined for at least one config (UNKNOWN)
+    3  Usage or input error
+
+Examples:
+    $SCRIPT -p source-readonly --dr-region us-west-2 output/prod-cc
+    $SCRIPT --facts tests/fixtures/posture/kms_trap.json output/prod-cc
+EOD
+}
+
+############################################################
+# Arguments
+############################################################
+
+profile=""; dr_region=""; facts_in=""; out_f=""; json_out=""; no_metrics=""
+backup_dir=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -p|--profile) profile="$2"; shift 2;;
+        --dr-region)  dr_region="$2"; shift 2;;
+        --facts)      facts_in="$2"; shift 2;;
+        --no-metrics) no_metrics=1; shift;;
+        -o)           out_f="$2"; shift 2;;
+        -j)           json_out=1; shift;;
+        -v)           echo "$SCRIPT $VERSION"; exit 0;;
+        -\?|--help)   usage; exit 0;;
+        -*)           echo "Unknown option: $1" >&2; usage; exit 3;;
+        *)            backup_dir="$1"; shift;;
+    esac
+done
+
+command -v jq >/dev/null 2>&1 || { echo "Error: jq not found" >&2; exit 3; }
+
+[ -z "$backup_dir" ] && { echo "Error: backup_dir is required" >&2; usage; exit 3; }
+[ -d "$backup_dir" ] || { echo "Error: not a directory: $backup_dir" >&2; exit 3; }
+
+sc_file="$backup_dir/storage_configs.json"
+[ -r "$sc_file" ] || { echo "Error: cannot read $sc_file" >&2; exit 3; }
+
+[ -z "$out_f" ] && out_f="$backup_dir/storage_resilience.json"
+profile_flag=""; [ -n "$profile" ] && profile_flag="--profile $profile"
+
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+    C_B=$'\033[1m'; C_G=$'\033[32m'; C_R=$'\033[31m'
+    C_Y=$'\033[33m'; C_D=$'\033[90m'; C_0=$'\033[m'
+else
+    C_B=""; C_G=""; C_R=""; C_Y=""; C_D=""; C_0=""
+fi
+
+############################################################
+# Normalise the Connect storage configs
+#
+# storage_configs.json is newline-delimited; each line is a
+# list-instance-storage-configs response. ResourceType is not always
+# present on the inner object, so it is passed in per probe by backup.
+# Fall back to inferring it from the prefix when absent.
+############################################################
+
+configs_json=$(
+    jq -s '
+      def infer(p):
+        if   (p|test("CallRecordings";"i"))   then "CALL_RECORDINGS"
+        elif (p|test("ChatTranscripts";"i"))  then "CHAT_TRANSCRIPTS"
+        elif (p|test("Reports";"i"))          then "SCHEDULED_REPORTS"
+        elif (p|test("Attachments";"i"))      then "ATTACHMENTS"
+        elif (p|test("Evaluations";"i"))      then "CONTACT_EVALUATIONS"
+        elif (p|test("ScreenRecordings";"i")) then "SCREEN_RECORDINGS"
+        elif (p|test("Email";"i"))            then "EMAIL_MESSAGES"
+        else "UNKNOWN_TYPE" end;
+      [ .[] | .StorageConfigs[]? ]
+      | map(
+          (.S3Config.BucketPrefix // "") as $p
+          | {
+              resource_type: (.ResourceType // infer($p)),
+              storage_type:  (.StorageType // "UNKNOWN"),
+              bucket:        (.S3Config.BucketName // null),
+              prefix:        $p,
+              encryption:    (.S3Config.EncryptionConfig.EncryptionType // "NONE"),
+              kms_key:       (.S3Config.EncryptionConfig.KeyId // null),
+              association_id:(.AssociationId // null)
+            }
+        )
+    ' "$sc_file" 2>/dev/null
+)
+[ -z "$configs_json" ] && configs_json='[]'
+
+s3_count=$(printf '%s' "$configs_json" | jq '[.[] | select(.storage_type=="S3")] | length')
+other_count=$(printf '%s' "$configs_json" | jq '[.[] | select(.storage_type!="S3")] | length')
+
+############################################################
+# COLLECT
+############################################################
+
+collect_facts() {
+    command -v aws >/dev/null 2>&1 || { echo "Error: aws CLI not found (use --facts to analyse offline)" >&2; exit 3; }
+
+    local buckets
+    buckets=$(printf '%s' "$configs_json" | jq -r '[.[] | select(.storage_type=="S3") | .bucket] | unique | .[]')
+
+    echo "{" > "$out_f.tmp"
+    printf '  "collected_at": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$out_f.tmp"
+    printf '  "dr_region_expected": %s,\n' "$( [ -n "$dr_region" ] && printf '"%s"' "$dr_region" || echo null )" >> "$out_f.tmp"
+    printf '  "configs": %s,\n' "$configs_json" >> "$out_f.tmp"
+    printf '  "buckets": {\n' >> "$out_f.tmp"
+
+    local first=1
+    for b in $buckets; do
+        [ -z "$b" ] && continue
+        [ "$first" -eq 0 ] && printf ',\n' >> "$out_f.tmp"
+        first=0
+        echo "  probing $b" >&2
+
+        # --- reachability + region
+        local reachable=false region="null" err="null"
+        if aws s3api head-bucket --bucket "$b" $profile_flag >/dev/null 2>&1; then
+            reachable=true
+            local loc
+            loc=$(aws s3api get-bucket-location --bucket "$b" $profile_flag --output json 2>/dev/null \
+                  | jq -r '.LocationConstraint // "us-east-1"')
+            [ -n "$loc" ] && [ "$loc" != "null" ] && region="\"$loc\""
+        else
+            err='"head-bucket failed (denied, missing, or another account)"'
+        fi
+
+        # --- versioning
+        local versioning="\"unknown\""
+        local vout
+        vout=$(aws s3api get-bucket-versioning --bucket "$b" $profile_flag --output json 2>/dev/null)
+        if [ -n "$vout" ]; then
+            versioning=$(printf '%s' "$vout" | jq '.Status // "Disabled"')
+        fi
+
+        # --- default encryption
+        local enc="null"
+        local eout
+        eout=$(aws s3api get-bucket-encryption --bucket "$b" $profile_flag --output json 2>/dev/null)
+        if [ -n "$eout" ]; then
+            enc=$(printf '%s' "$eout" | jq -c '
+              (.ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault // {})
+              | {algorithm: (.SSEAlgorithm // "none"), key: (.KMSMasterKeyID // null)}')
+        fi
+
+        # --- object lock
+        local lock="\"unknown\""
+        local lout
+        lout=$(aws s3api get-object-lock-configuration --bucket "$b" $profile_flag --output json 2>/dev/null)
+        if [ -n "$lout" ]; then
+            lock=$(printf '%s' "$lout" | jq '.ObjectLockConfiguration.ObjectLockEnabled // "Disabled"')
+        else
+            lock='"Disabled"'
+        fi
+
+        # --- replication. Absent config is a normal answer, not a failure.
+        local repl="null" repl_err="null"
+        local rout rerr
+        rerr=$(mktemp)
+        rout=$(aws s3api get-bucket-replication --bucket "$b" $profile_flag --output json 2>"$rerr")
+        if [ -n "$rout" ]; then
+            repl=$(printf '%s' "$rout" | jq -c '.ReplicationConfiguration // null')
+        else
+            if grep -q 'ReplicationConfigurationNotFound\|NoSuchReplicationConfiguration' "$rerr" 2>/dev/null; then
+                repl_err='"none configured"'
+            elif grep -qi 'accessdenied\|not authorized' "$rerr" 2>/dev/null; then
+                repl_err='"AccessDenied"'
+            else
+                repl_err=$(printf '%s' "$(head -1 "$rerr" 2>/dev/null)" | jq -Rs 'rtrimstr("\n")')
+            fi
+        fi
+        rm -f "$rerr"
+
+        # --- destination buckets referenced by the rules
+        local dests="{}"
+        if [ "$repl" != "null" ]; then
+            local dlist
+            dlist=$(printf '%s' "$repl" | jq -r '[.Rules[]?.Destination.Bucket // empty] | unique | .[]' | sed 's|^arn:aws:s3:::||')
+            dests="{"
+            local dfirst=1
+            for d in $dlist; do
+                [ -z "$d" ] && continue
+                [ "$dfirst" -eq 0 ] && dests="$dests,"
+                dfirst=0
+                local dreach=false dregion="null"
+                if aws s3api head-bucket --bucket "$d" $profile_flag >/dev/null 2>&1; then
+                    dreach=true
+                    local dl
+                    dl=$(aws s3api get-bucket-location --bucket "$d" $profile_flag --output json 2>/dev/null \
+                         | jq -r '.LocationConstraint // "us-east-1"')
+                    [ -n "$dl" ] && [ "$dl" != "null" ] && dregion="\"$dl\""
+                fi
+                dests="$dests\"$d\":{\"reachable\":$dreach,\"region\":$dregion}"
+            done
+            dests="$dests}"
+        fi
+
+        # --- replication health (best effort)
+        local metrics="null"
+        if [ -z "$no_metrics" ] && [ "$repl" != "null" ]; then
+            local pend
+            pend=$(aws cloudwatch get-metric-statistics \
+                     --namespace AWS/S3 --metric-name OperationsPendingReplication \
+                     --dimensions Name=SourceBucket,Value="$b" \
+                     --start-time "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)" \
+                     --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                     --period 300 --statistics Maximum \
+                     $profile_flag --output json 2>/dev/null \
+                   | jq '[.Datapoints[]?.Maximum] | if length==0 then null else max end')
+            [ -n "$pend" ] && metrics="{\"operations_pending\": $pend}"
+        fi
+
+        cat >> "$out_f.tmp" <<EOD
+    "$b": {
+      "reachable": $reachable,
+      "region": $region,
+      "error": $err,
+      "versioning": $versioning,
+      "encryption": $enc,
+      "object_lock": $lock,
+      "replication": $repl,
+      "replication_error": $repl_err,
+      "destinations": $dests,
+      "metrics": $metrics
+    }
+EOD
+    done
+
+    printf '\n  }\n}\n' >> "$out_f.tmp"
+
+    if jq -e . "$out_f.tmp" >/dev/null 2>&1; then
+        mv "$out_f.tmp" "$out_f"
+    else
+        echo "Error: collected facts are not valid JSON; left at $out_f.tmp" >&2
+        exit 3
+    fi
+}
+
+############################################################
+# ANALYSE
+#
+# Pure transformation of the facts file. No AWS calls, so the posture
+# rules can be tested against fixtures.
+############################################################
+
+analyse() {
+    local facts="$1"
+    jq '
+      def rule_prefix:
+        (.Filter.Prefix // .Filter.And.Prefix // .Prefix // "");
+      def rule_tagged:
+        ((.Filter.Tag // null) != null) or ((.Filter.And.Tags // null) != null);
+      def sse_kms_ok:
+        (((.SourceSelectionCriteria.SseKmsEncryptedObjects.Status) // "Disabled") == "Enabled")
+        and (((.Destination.EncryptionConfiguration.ReplicaKmsKeyID) // "") != "");
+      def dest_bucket:
+        ((.Destination.Bucket // "") | sub("^arn:aws:s3:::";""));
+
+      . as $f
+      | ($f.dr_region_expected // null) as $drr
+      | {
+          collected_at: $f.collected_at,
+          dr_region_expected: $drr,
+          configs: [
+            $f.configs[]
+            | . as $c
+            | if $c.storage_type != "S3" then
+                { resource_type:$c.resource_type, storage_type:$c.storage_type,
+                  bucket:$c.bucket, prefix:$c.prefix, posture:"NOT_APPLICABLE",
+                  reasons:["\($c.storage_type) destinations are out of scope for S3 replication posture"],
+                  destination:null, destination_region:null }
+              else
+                ($f.buckets[$c.bucket] // null) as $b
+                | if ($b == null) or ($b.reachable != true) then
+                    { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
+                      prefix:$c.prefix, posture:"UNKNOWN",
+                      reasons:[ ($b.error // "bucket facts unavailable") ],
+                      destination:null, destination_region:null }
+                  elif ($b.replication == null) then
+                    { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
+                      prefix:$c.prefix,
+                      posture: (if ($b.replication_error == "AccessDenied") then "UNKNOWN" else "LOCAL_ONLY" end),
+                      reasons:[ (if ($b.replication_error == "AccessDenied")
+                                 then "replication configuration not readable (AccessDenied)"
+                                 else "no replication configuration on the bucket" end) ],
+                      destination:null, destination_region:null }
+                  elif (($b.versioning // "unknown") != "Enabled") then
+                    { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
+                      prefix:$c.prefix, posture:"LOCAL_ONLY",
+                      reasons:["bucket versioning is \($b.versioning) — replication requires Enabled"],
+                      destination:null, destination_region:null }
+                  else
+                    # Rules that are enabled AND whose prefix covers this config prefix
+                    # Bind the rule before the pipe: inside startswith(...) the
+                    # input is the prefix string, so rule_prefix must be applied
+                    # to $r explicitly rather than to the implicit ".".
+                    ([ $b.replication.Rules[]?
+                       | select((.Status // "") == "Enabled")
+                       | . as $r
+                       | select(($c.prefix // "") | startswith($r | rule_prefix))
+                     ]) as $covering
+                    | ([ $covering[] | select(rule_tagged | not) ]) as $untagged
+                    | if ($covering | length) == 0 then
+                        { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
+                          prefix:$c.prefix, posture:"LOCAL_ONLY",
+                          reasons:["no enabled replication rule covers prefix \u0027\($c.prefix)\u0027"],
+                          destination:null, destination_region:null }
+                      elif ($untagged | length) == 0 then
+                        { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
+                          prefix:$c.prefix, posture:"LOCAL_ONLY",
+                          reasons:["the only covering rule is tag-filtered; coverage of Connect objects cannot be verified"],
+                          destination:null, destination_region:null }
+                      else
+                        # Is this data KMS-encrypted, from either the Connect config or the bucket default?
+                        ((($c.encryption // "NONE") == "KMS")
+                         or (($b.encryption.algorithm // "none") == "aws:kms")) as $is_kms
+                        | ([ $untagged[] | select(if $is_kms then sse_kms_ok else true end) ]) as $usable
+                        | if ($usable | length) == 0 then
+                            { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
+                              prefix:$c.prefix, posture:"LOCAL_ONLY",
+                              reasons:["objects are KMS-encrypted but the covering rule does not replicate SSE-KMS objects (needs SseKmsEncryptedObjects=Enabled and a ReplicaKmsKeyID) — the destination receives nothing"],
+                              destination:([$untagged[]|dest_bucket]|first),
+                              destination_region:null }
+                          else
+                            ($usable | first) as $r
+                            | ($r | dest_bucket) as $db
+                            | (($f.buckets[$c.bucket].destinations[$db]) // null) as $d
+                            | (($d.region) // null) as $dreg
+                            | ((($f.buckets[$c.bucket].metrics.operations_pending) // null)) as $pend
+                            | {
+                                resource_type:$c.resource_type, storage_type:"S3",
+                                bucket:$c.bucket, prefix:$c.prefix,
+                                destination:$db, destination_region:$dreg,
+                                rule_id:($r.ID // null),
+                                delete_marker_replication:(($r.DeleteMarkerReplication.Status) // "unspecified"),
+                                posture:(
+                                  if ($d != null) and ($d.reachable != true) then "REGIONAL_CONFIGURED"
+                                  elif ($pend != null) and ($pend > 0) then "REGIONAL_DEGRADED"
+                                  elif ($pend == null) then "REGIONAL_CONFIGURED"
+                                  else "REGIONAL_VERIFIED" end),
+                                reasons:(
+                                  [ "rule \($r.ID // "?") replicates prefix \u0027\(($r|rule_prefix))\u0027 to \($db)" ]
+                                  + (if $is_kms then ["SSE-KMS object replication enabled with a replica key"] else [] end)
+                                  + (if ($d != null) and ($d.reachable != true) then ["destination bucket not reachable from this profile — health unverified"] else [] end)
+                                  + (if ($pend != null) and ($pend > 0) then ["\($pend) operations pending replication — backlog present"] else [] end)
+                                  + (if ($pend == null) then ["replication health not measured"] else [] end)
+                                  + (if ($drr != null) and ($dreg != null) and ($dreg != $drr) then ["destination region \($dreg) is not the intended DR region \($drr)"] else [] end)
+                                )
+                              }
+                          end
+                      end
+                  end
+              end
+          ]
+        }
+      | . + {
+          overall: (
+            [ .configs[] | select(.posture != "NOT_APPLICABLE") | .posture ] as $p
+            | if ($p|length) == 0 then "NOT_APPLICABLE"
+              elif ($p | any(. == "LOCAL_ONLY")) then "LOCAL_ONLY"
+              elif ($p | any(. == "UNKNOWN")) then "UNKNOWN"
+              elif ($p | any(. == "REGIONAL_DEGRADED")) then "REGIONAL_DEGRADED"
+              elif ($p | any(. == "REGIONAL_CONFIGURED")) then "REGIONAL_CONFIGURED"
+              else "REGIONAL_VERIFIED" end),
+          dr_region_actual: (
+            [ .configs[] | .destination_region | select(. != null) ] | unique
+            | if length == 1 then .[0] else null end)
+        }
+    ' "$facts"
+}
+
+############################################################
+# REPORT
+############################################################
+
+report() {
+    local a="$1"
+    local overall actual
+    overall=$(printf '%s' "$a" | jq -r '.overall')
+    actual=$(printf '%s' "$a" | jq -r '.dr_region_actual // empty')
+
+    local col="$C_D" head=""
+    case "$overall" in
+        LOCAL_ONLY)          col="$C_R"; head="STORAGE RECOVERY POSTURE: LOCAL ONLY";;
+        UNKNOWN)             col="$C_Y"; head="STORAGE RECOVERY POSTURE: UNKNOWN";;
+        REGIONAL_DEGRADED)   col="$C_Y"; head="STORAGE RECOVERY POSTURE: REGIONAL, DEGRADED${actual:+ ($actual)}";;
+        REGIONAL_CONFIGURED) col="$C_Y"; head="STORAGE RECOVERY POSTURE: REGIONAL, UNVERIFIED${actual:+ ($actual)}";;
+        REGIONAL_VERIFIED)   col="$C_G"; head="STORAGE RECOVERY POSTURE: REGIONAL${actual:+ ($actual)}";;
+        NOT_APPLICABLE)      col="$C_D"; head="STORAGE RECOVERY POSTURE: NOT APPLICABLE (no S3 storage configs)";;
+    esac
+
+    echo
+    echo "${col}${C_B}${head}${C_0}"
+    echo
+
+    printf '%s' "$a" | jq -r '
+      def pad(n): . + (" " * (n - length));
+      .configs[]
+      | "  " + ((.resource_type // "?") | pad(26))
+        + ((.bucket // "-") | pad(2)) + "  "
+        + (.prefix // "-")
+        + "\n      posture: " + .posture
+        + (if .destination then "  ->  " + .destination + (if .destination_region then " (" + .destination_region + ")" else "" end) else "" end)
+        + (if (.delete_marker_replication // "unspecified") != "unspecified" then "\n      delete markers: " + .delete_marker_replication else "" end)
+        + ( [ .reasons[] | "\n      - " + . ] | add // "" )
+    '
+
+    echo
+    case "$overall" in
+        LOCAL_ONLY)
+            cat <<EOD
+  ${C_B}Recoverable from${C_0} : loss or corruption of the Connect instance, with
+                     the bucket and its region intact
+  ${C_B}NOT recoverable${C_0}  : regional outage, account compromise, bucket deletion
+
+  To enable regional recovery, configure cross-region replication to the DR
+  region with SSE-KMS object replication enabled and a destination-region key.
+EOD
+            ;;
+        REGIONAL_VERIFIED|REGIONAL_CONFIGURED|REGIONAL_DEGRADED)
+            cat <<EOD
+  ${C_B}Recoverable from${C_0} : instance loss, and a regional outage affecting the
+                     source region${actual:+, by recovering into $actual}
+  ${C_B}Still not covered${C_0}: deletion that replicates before it is noticed —
+                     check delete-marker replication and versioning above
+EOD
+            ;;
+        UNKNOWN)
+            cat <<EOD
+  Posture could not be determined for at least one config. The usual cause is
+  a bucket owned by another account, or a profile without
+  s3:GetReplicationConfiguration. Treat as LOCAL_ONLY until proven otherwise.
+EOD
+            ;;
+    esac
+    echo
+}
+
+############################################################
+# Main
+############################################################
+
+if [ -n "$facts_in" ]; then
+    [ -r "$facts_in" ] || { echo "Error: cannot read $facts_in" >&2; exit 3; }
+    facts_file="$facts_in"
+else
+    if [ "$s3_count" -eq 0 ]; then
+        echo "No S3 storage configs in $sc_file — nothing to probe." >&2
+        [ "$other_count" -gt 0 ] && echo "($other_count non-S3 config(s) present; out of scope.)" >&2
+        exit 0
+    fi
+    collect_facts
+    facts_file="$out_f"
+    echo "Facts: $out_f" >&2
+fi
+
+analysis=$(analyse "$facts_file")
+
+if [ -n "$json_out" ]; then
+    printf '%s\n' "$analysis"
+else
+    report "$analysis"
+fi
+
+overall=$(printf '%s' "$analysis" | jq -r '.overall')
+case "$overall" in
+    LOCAL_ONLY) exit 1;;
+    UNKNOWN)    exit 2;;
+    *)          exit 0;;
+esac
