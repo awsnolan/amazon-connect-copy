@@ -174,4 +174,31 @@ jq -e . "$D/15_unencrypted_ok.json" >/dev/null
 #     delete_protection must be NONE — a single delete is permanent.
 wrap 16_versioning_never_enabled.json "$(bucket NeverEnabled null '"none configured"' '{}' null)" '"us-west-2"'
 
+# --- 17. The real-world Connect default, observed in two live accounts:
+#     bucket DEFAULT encryption is AES256 while Connect writes every object
+#     with KMS, versioning never enabled, no replication. Inspecting bucket
+#     encryption tells the operator the opposite of the truth.
+cat > "$D/17_misleading_bucket_default.json" <<EOD
+{
+  "collected_at": "2026-11-24T00:00:00Z",
+  "dr_region_expected": "ap-southeast-4",
+  "configs": [$three_configs],
+  "buckets": {
+    "$B": {
+      "reachable": true,
+      "region": "ap-southeast-2",
+      "error": null,
+      "versioning": "NeverEnabled",
+      "encryption": {"algorithm":"AES256","key":null},
+      "object_lock": "Disabled",
+      "replication": null,
+      "replication_error": "none configured",
+      "destinations": {},
+      "metrics": null
+    }
+  }
+}
+EOD
+jq -e . "$D/17_misleading_bucket_default.json" >/dev/null
+
 echo "Wrote $(ls "$D" | wc -l | tr -d ' ') fixtures to $D"

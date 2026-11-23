@@ -461,6 +461,24 @@ analyse() {
               elif ($bs | all(.object_lock == "Enabled"))   then "IMMUTABLE"
               else "VERSIONED" end)
         }
+      # Facts the SSE-KMS replication warning needs. Surfaced here so the
+      # report layer has everything without re-reading the facts file.
+      | . + {
+          encryption: (
+            [ $f.buckets | to_entries[] | .value ] as $bs
+            | (($f.configs | map(select(.storage_type == "S3" and .encryption == "KMS")) | length) > 0) as $cw
+            | ([ $bs[] | (.encryption.algorithm // "none") ] | unique) as $bd
+            | {
+                connect_writes_kms: $cw,
+                bucket_defaults: $bd,
+                # The dangerous case: Connect writes KMS objects while the
+                # bucket default reports something else, so inspecting bucket
+                # encryption tells the operator the opposite of the truth.
+                misleading: ($cw and (($bd | any(. == "aws:kms")) | not)),
+                any_replication: ([ $bs[] | .replication ] | any(. != null)),
+                versioning: ([ $bs[] | .versioning ] | unique | join(", "))
+              })
+        }
     ' "$facts"
 }
 
@@ -518,9 +536,6 @@ report() {
   ${C_B}Recoverable from${C_0} : loss or corruption of the Connect instance, with
                      the bucket and its region intact
   ${C_B}NOT recoverable${C_0}  : regional outage, account compromise, bucket deletion
-
-  To enable regional recovery, configure cross-region replication to the DR
-  region with SSE-KMS object replication enabled and a destination-region key.
 EOD
             ;;
         REGIONAL_VERIFIED|REGIONAL_CONFIGURED|REGIONAL_DEGRADED)
@@ -540,6 +555,95 @@ EOD
             ;;
     esac
     echo
+
+    kms_replication_warning "$a"
+}
+
+############################################################
+# SSE-KMS replication warning
+#
+# Emitted loudly, because this is the single most likely way to configure
+# replication and still lose everything. S3 silently skips SSE-KMS encrypted
+# objects unless the rule opts in. The rule then reports "Enabled" in the
+# console and the API while the destination stays empty.
+#
+# Shown when the data is KMS-encrypted and either:
+#   - no replication exists yet  -> warn BEFORE they configure it
+#   - replication exists but SSE-KMS replication is absent -> already broken
+############################################################
+
+kms_replication_warning() {
+    local a="$1"
+    local applies any_repl misleading bdefaults vers sse_missing
+    applies=$(printf '%s' "$a"  | jq -r '.encryption.connect_writes_kms // false')
+    [ "$applies" != "true" ] && return 0
+
+    any_repl=$(printf '%s' "$a"   | jq -r '.encryption.any_replication // false')
+    misleading=$(printf '%s' "$a" | jq -r '.encryption.misleading // false')
+    bdefaults=$(printf '%s' "$a"  | jq -r '[.encryption.bucket_defaults[]?] | join(", ")')
+    vers=$(printf '%s' "$a"       | jq -r '.encryption.versioning // "unknown"')
+    sse_missing=$(printf '%s' "$a" | jq -r '[.configs[] | .reasons[]? | select(test("SSE-KMS objects"))] | length')
+
+    # Nothing to warn about: replication exists and no config flagged the trap
+    if [ "$any_repl" = "true" ] && [ "${sse_missing:-0}" -eq 0 ]; then
+        return 0
+    fi
+
+    local title
+    if [ "${sse_missing:-0}" -gt 0 ]; then
+        title="REPLICATION IS CONFIGURED BUT REPLICATING NOTHING"
+    else
+        title="READ THIS BEFORE ENABLING REPLICATION"
+    fi
+
+    cat <<EOD
+
+${C_R}${C_B}  ╔══════════════════════════════════════════════════════════════════════════╗
+  ║  !!  $(printf '%-68s' "$title")║
+  ╚══════════════════════════════════════════════════════════════════════════╝${C_0}
+
+  Connect writes these objects with ${C_B}SSE-KMS${C_0}. Amazon S3 does ${C_B}not${C_0} replicate
+  SSE-KMS encrypted objects unless the replication rule explicitly opts in.
+
+  Configure replication without the two settings below and the rule will show
+  as ${C_B}Enabled${C_0} in the console and in the API, while ${C_B}zero${C_0} recordings reach the
+  destination bucket. There is no error and no warning from S3.
+
+  ${C_B}Required on the replication rule${C_0}
+    SourceSelectionCriteria.SseKmsEncryptedObjects.Status = Enabled
+    Destination.EncryptionConfiguration.ReplicaKmsKeyID   = <key in the DR region>
+EOD
+
+    if [ "$misleading" = "true" ]; then
+        cat <<EOD
+
+  ${C_R}${C_B}Misleading signal on this bucket${C_0}
+    bucket default encryption reports : ${bdefaults}
+    but Connect writes every object with : KMS
+
+    So inspecting the bucket's encryption setting will tell you SSE-KMS
+    replication is unnecessary. It is necessary. Trust the Connect storage
+    config, not the bucket default.
+EOD
+    fi
+
+    cat <<EOD
+
+  ${C_B}Also required${C_0}
+    - Versioning Enabled on the source bucket   (currently: ${vers})
+    - A KMS key in the ${C_B}destination${C_0} region. The source key cannot be used.
+    - Destination bucket policy and destination key policy permitting the
+      replication role. Cross-account adds a second policy on each side.
+    - Decide DeleteMarkerReplication deliberately. Disabled is usually right,
+      so a malicious or accidental delete does not follow the data.
+
+  ${C_B}After enabling, verify. Do not assume.${C_0}
+    Re-run this tool: the posture must change to REGIONAL_*
+    Or check the rule directly:
+      aws s3api get-bucket-replication --bucket <bucket> \\
+        --query 'ReplicationConfiguration.Rules[].SourceSelectionCriteria'
+
+EOD
 }
 
 ############################################################

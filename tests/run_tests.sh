@@ -1562,6 +1562,76 @@ DELETE_CASES
     dprep=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/16_versioning_never_enabled.json" "$POSTURE_STUB" 2>&1)
     if printf '%s' "$dprep" | grep -q 'DELETION PROTECTION: NONE'; then test_pass; else test_fail "not surfaced in report"; fi
 
+    # The SSE-KMS replication warning. This is the single most likely way to
+    # configure replication and still lose everything, so it must be loud when
+    # relevant and silent when not.
+    test_start "SSE-KMS warning fires when KMS data has no replication yet"
+    w1=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/01_no_replication.json" "$POSTURE_STUB" 2>&1)
+    if printf '%s' "$w1" | grep -q 'READ THIS BEFORE ENABLING REPLICATION' \
+       && printf '%s' "$w1" | grep -q 'SseKmsEncryptedObjects'; then
+        test_pass
+    else
+        test_fail "warning or required-field text missing"
+    fi
+
+    test_start "SSE-KMS warning says replication is replicating nothing when trap is live"
+    w2=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/02_kms_not_replicated.json" "$POSTURE_STUB" 2>&1)
+    if printf '%s' "$w2" | grep -q 'REPLICATING NOTHING'; then
+        test_pass
+    else
+        test_fail "active-trap title not used"
+    fi
+
+    test_start "SSE-KMS warning names both required rule fields"
+    if printf '%s' "$w1" | grep -q 'SseKmsEncryptedObjects.Status = Enabled' \
+       && printf '%s' "$w1" | grep -q 'ReplicaKmsKeyID'; then
+        test_pass
+    else
+        test_fail "required fields not both named"
+    fi
+
+    # Reproduces the configuration observed in two live accounts: an AES256
+    # bucket default with KMS-encrypted objects. Checking bucket encryption
+    # tells the operator the opposite of the truth.
+    test_start "SSE-KMS warning flags a misleading AES256 bucket default"
+    wm=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/17_misleading_bucket_default.json" "$POSTURE_STUB" 2>&1)
+    if printf '%s' "$wm" | grep -q 'Misleading signal' \
+       && printf '%s' "$wm" | grep -q 'AES256'; then
+        test_pass
+    else
+        test_fail "misleading bucket default not called out"
+    fi
+
+    test_start "no misleading section when bucket default already agrees with Connect"
+    if ! printf '%s' "$w1" | grep -q 'Misleading signal'; then
+        test_pass
+    else
+        test_fail "misleading section shown when bucket default is already KMS"
+    fi
+
+    test_start "SSE-KMS warning suppressed when replication is healthy"
+    w3=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/05_regional_verified.json" "$POSTURE_STUB" 2>&1)
+    if ! printf '%s' "$w3" | grep -q 'BEFORE ENABLING REPLICATION\|REPLICATING NOTHING'; then
+        test_pass
+    else
+        test_fail "warning shown when replication is already correct"
+    fi
+
+    test_start "SSE-KMS warning suppressed when data is not KMS encrypted"
+    w4=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/15_unencrypted_ok.json" "$POSTURE_STUB" 2>&1)
+    if ! printf '%s' "$w4" | grep -q 'BEFORE ENABLING REPLICATION\|REPLICATING NOTHING'; then
+        test_pass
+    else
+        test_fail "warning shown for non-KMS data"
+    fi
+
+    test_start "SSE-KMS warning states the current versioning state"
+    if printf '%s' "$w1" | grep -qi 'Versioning Enabled on the source bucket'; then
+        test_pass
+    else
+        test_fail "versioning prerequisite not stated"
+    fi
+
     test_start "bad input produces a clean error, not a stack trace"
     berr=$("$POSTURE_BIN" --facts /nonexistent "$POSTURE_STUB" 2>&1); brc=$?
     if [ "$brc" -eq 3 ] && printf '%s' "$berr" | grep -q 'cannot read'; then
