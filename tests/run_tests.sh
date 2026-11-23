@@ -1516,6 +1516,52 @@ POSTURE_CASES
         test_fail "analysis appears to require AWS credentials"
     fi
 
+    # Deletion protection is a separate axis from geographic recovery.
+    # A bucket can be REGIONAL_VERIFIED and still lose data to one delete.
+    while IFS='|' read -r df dexp; do
+        [ -z "$df" ] && continue
+        test_start "delete protection: $df -> $dexp"
+        if [ ! -f "$POSTURE_FIX/$df" ]; then
+            test_skip "fixture missing"
+            continue
+        fi
+        dgot=$("$POSTURE_BIN" --facts "$POSTURE_FIX/$df" -j "$POSTURE_STUB" 2>/dev/null \
+               | jq -r '.delete_protection' 2>/dev/null)
+        if [ "$dgot" = "$dexp" ]; then test_pass; else test_fail "got '$dgot', expected '$dexp'"; fi
+    done <<'DELETE_CASES'
+16_versioning_never_enabled.json|NONE
+04_versioning_suspended.json|NONE
+05_regional_verified.json|VERSIONED
+10_bucket_unreachable.json|UNKNOWN
+DELETE_CASES
+
+    # NeverEnabled and unknown must not collapse into one value: the first is
+    # a definitive "no protection", the second is "could not tell".
+    test_start "never-enabled versioning is distinguished from unreadable"
+    nev=$("$POSTURE_BIN" --facts "$POSTURE_FIX/16_versioning_never_enabled.json" -j "$POSTURE_STUB" 2>/dev/null \
+          | jq -r '.delete_protection' 2>/dev/null)
+    unk=$("$POSTURE_BIN" --facts "$POSTURE_FIX/10_bucket_unreachable.json" -j "$POSTURE_STUB" 2>/dev/null \
+          | jq -r '.delete_protection' 2>/dev/null)
+    if [ "$nev" = "NONE" ] && [ "$unk" = "UNKNOWN" ]; then
+        test_pass
+    else
+        test_fail "never-enabled gave '$nev', unreadable gave '$unk'"
+    fi
+
+    # When versioning IS the binding constraint for replication, say so.
+    test_start "suspended versioning is reported as the replication blocker"
+    susp=$("$POSTURE_BIN" --facts "$POSTURE_FIX/04_versioning_suspended.json" -j "$POSTURE_STUB" 2>/dev/null \
+           | jq -r '.configs[0].reasons[]' 2>/dev/null)
+    if printf '%s' "$susp" | grep -qi 'suspended'; then
+        test_pass
+    else
+        test_fail "suspended versioning not named as the cause"
+    fi
+
+    test_start "report shows deletion protection as its own line"
+    dprep=$(NO_COLOR=1 "$POSTURE_BIN" --facts "$POSTURE_FIX/16_versioning_never_enabled.json" "$POSTURE_STUB" 2>&1)
+    if printf '%s' "$dprep" | grep -q 'DELETION PROTECTION: NONE'; then test_pass; else test_fail "not surfaced in report"; fi
+
     test_start "bad input produces a clean error, not a stack trace"
     berr=$("$POSTURE_BIN" --facts /nonexistent "$POSTURE_STUB" 2>&1); brc=$?
     if [ "$brc" -eq 3 ] && printf '%s' "$berr" | grep -q 'cannot read'; then

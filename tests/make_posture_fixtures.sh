@@ -169,4 +169,9 @@ cat > "$D/15_unencrypted_ok.json" <<EOD
 EOD
 jq -e . "$D/15_unencrypted_ok.json" >/dev/null
 
+# --- 16. Versioning never enabled (real-world default Connect bucket)
+#     Distinct from Suspended: the API returns exit 0 with an empty body.
+#     delete_protection must be NONE — a single delete is permanent.
+wrap 16_versioning_never_enabled.json "$(bucket NeverEnabled null '"none configured"' '{}' null)" '"us-west-2"'
+
 echo "Wrote $(ls "$D" | wc -l | tr -d ' ') fixtures to $D"

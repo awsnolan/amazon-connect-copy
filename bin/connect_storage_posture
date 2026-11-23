@@ -188,11 +188,23 @@ collect_facts() {
         fi
 
         # --- versioning
+        #
+        # Branch on exit status, not on output emptiness. A bucket where
+        # versioning was NEVER enabled returns exit 0 with an entirely empty
+        # body — a definitive answer, not an unknown one. Treating it as
+        # "unknown" hides the most consequential finding available: with no
+        # versioning, a single DeleteObject is immediately permanent.
+        # Confirmed against a live bucket, 2026-11.
         local versioning="\"unknown\""
-        local vout
+        local vout vrc
         vout=$(aws s3api get-bucket-versioning --bucket "$b" $profile_flag --output json 2>/dev/null)
-        if [ -n "$vout" ]; then
-            versioning=$(printf '%s' "$vout" | jq '.Status // "Disabled"')
+        vrc=$?
+        if [ "$vrc" -ne 0 ]; then
+            versioning='"unknown"'
+        elif [ -z "$vout" ]; then
+            versioning='"NeverEnabled"'
+        else
+            versioning=$(printf '%s' "$vout" | jq '.Status // "NeverEnabled"')
         fi
 
         # --- default encryption
@@ -349,7 +361,14 @@ analyse() {
                   elif (($b.versioning // "unknown") != "Enabled") then
                     { resource_type:$c.resource_type, storage_type:"S3", bucket:$c.bucket,
                       prefix:$c.prefix, posture:"LOCAL_ONLY",
-                      reasons:["bucket versioning is \($b.versioning) — replication requires Enabled"],
+                      reasons:(
+                        if ($b.versioning == "NeverEnabled") then
+                          ["bucket versioning has never been enabled — replication is impossible, and a single delete is permanent with no prior version and no delete marker"]
+                        elif ($b.versioning == "Suspended") then
+                          ["bucket versioning is Suspended — replication is stopped and new deletes are permanent"]
+                        else
+                          ["bucket versioning could not be determined (\($b.versioning)) — assume not enabled"]
+                        end),
                       destination:null, destination_region:null }
                   else
                     # Rules that are enabled AND whose prefix covers this config prefix
@@ -428,6 +447,20 @@ analyse() {
             [ .configs[] | .destination_region | select(. != null) ] | unique
             | if length == 1 then .[0] else null end)
         }
+      # Deletion protection is ORTHOGONAL to geographic recovery. Replication
+      # answers "can we survive losing the region". Versioning and Object Lock
+      # answer "can we survive someone deleting this". A bucket can be
+      # REGIONAL_VERIFIED and still lose data to one delete, so the two axes
+      # are reported separately rather than collapsed into a single value.
+      | . + {
+          delete_protection: (
+            [ $f.buckets | to_entries[] | .value ] as $bs
+            | if   ($bs | length) == 0                      then "NOT_APPLICABLE"
+              elif ($bs | any(.versioning == "unknown"))    then "UNKNOWN"
+              elif ($bs | any(.versioning != "Enabled"))    then "NONE"
+              elif ($bs | all(.object_lock == "Enabled"))   then "IMMUTABLE"
+              else "VERSIONED" end)
+        }
     ' "$facts"
 }
 
@@ -451,8 +484,19 @@ report() {
         NOT_APPLICABLE)      col="$C_D"; head="STORAGE RECOVERY POSTURE: NOT APPLICABLE (no S3 storage configs)";;
     esac
 
+    local dp dpcol dptext
+    dp=$(printf '%s' "$a" | jq -r '.delete_protection // "UNKNOWN"')
+    case "$dp" in
+        NONE)      dpcol="$C_R"; dptext="DELETION PROTECTION: NONE — a single delete is permanent";;
+        VERSIONED) dpcol="$C_Y"; dptext="DELETION PROTECTION: VERSIONED — deletes recoverable, but a privileged user can purge versions";;
+        IMMUTABLE) dpcol="$C_G"; dptext="DELETION PROTECTION: IMMUTABLE — Object Lock in force";;
+        UNKNOWN)   dpcol="$C_Y"; dptext="DELETION PROTECTION: UNKNOWN — versioning state could not be read";;
+        *)         dpcol="$C_D"; dptext="DELETION PROTECTION: not applicable";;
+    esac
+
     echo
     echo "${col}${C_B}${head}${C_0}"
+    echo "${dpcol}${C_B}${dptext}${C_0}"
     echo
 
     printf '%s' "$a" | jq -r '
