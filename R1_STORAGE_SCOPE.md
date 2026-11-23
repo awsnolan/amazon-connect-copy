@@ -240,6 +240,144 @@ anything left by an interrupted run is obvious.
 
 *Medium. This is the deliverable that gives R1 its name.*
 
+### D5a — Storage recovery posture, captured at backup time
+
+The highest-value addition, and it supersedes part of D5. Rather than *assuming*
+what recovery is possible, capture it as a fact during backup and state it
+plainly.
+
+The three storage configs on this instance share one bucket and differ only by
+prefix:
+
+```
+CALL_RECORDINGS   <bucket>  connect/<alias>/CallRecordings   KMS
+CHAT_TRANSCRIPTS  <bucket>  connect/<alias>/ChatTranscripts  KMS
+SCHEDULED_REPORTS <bucket>  connect/<alias>/Reports          KMS
+```
+
+So a single replication rule covering `connect/` would serve all three — and a
+single misconfiguration breaks all three together.
+
+#### Two traps that make a naive check misleading
+
+**Trap 1 — SSE-KMS objects are not replicated by default.** Every config here is
+KMS-encrypted. S3 does not replicate SSE-KMS encrypted objects unless the rule
+explicitly sets `SourceSelectionCriteria.SseKmsEncryptedObjects.Status =
+Enabled` **and** supplies `Destination.EncryptionConfiguration.ReplicaKmsKeyID`.
+
+Without both, replication reads as "Enabled" in the console and in
+`get-bucket-replication`, while **no recordings reach the destination at all**.
+A team could believe they have regional recovery and have an empty destination
+bucket.
+
+**Trap 2 — prefix filters.** A rule scoped to a prefix that does not cover
+`connect/<alias>/...` replicates nothing relevant, while still reporting as
+configured. The rule's `Filter.Prefix` must be compared against the
+`BucketPrefix` in each Connect storage config.
+
+Checking "is replication configured" without these two correlations produces
+false confidence, which is worse than no check.
+
+#### What to capture
+
+Read-only, per distinct S3 bucket referenced by any storage config:
+
+| Call | Establishes |
+|---|---|
+| `s3api get-bucket-location` | Source region |
+| `s3api get-bucket-versioning` | Versioning — a hard CRR prerequisite; if suspended, replication is stopped |
+| `s3api get-bucket-encryption` | Whether objects are SSE-KMS, which triggers Trap 1 |
+| `s3api get-bucket-replication` | Rules, status, `Filter.Prefix`, destination bucket and region, `SseKmsEncryptedObjects`, `ReplicaKmsKeyID`, delete-marker replication, RTC |
+| `s3api head-bucket` on the destination | Destination exists and is reachable |
+| `s3api get-object-lock-configuration` | Immutability, if claimed for retention |
+| `cloudwatch get-metric-statistics` on `OperationsPendingReplication`, `BytesPendingReplication`, `ReplicationLatency` | Whether replication is *working*, not merely configured |
+
+Written to `storage_resilience.json` alongside `storage_configs.json`.
+
+Note on delete-marker replication: for cyber recovery you may deliberately
+**not** want delete markers replicated, so a malicious deletion does not
+propagate to the copy. Capture the setting and report it; do not assume either
+value is correct.
+
+#### Posture derivation
+
+| Posture | Condition |
+|---|---|
+| `UNKNOWN` | Bucket config unreadable — denied, or bucket in another account |
+| `LOCAL_ONLY` | No replication, or no enabled rule whose prefix covers the Connect prefix, or SSE-KMS replication not enabled on a KMS bucket, or versioning not enabled |
+| `REGIONAL_CONFIGURED` | Rules correct and destination reachable, health not verified |
+| `REGIONAL_DEGRADED` | Rules correct but a pending-replication backlog is present |
+| `REGIONAL_VERIFIED` | Rules correct, destination reachable, no backlog |
+
+#### What the operator is told
+
+Stated as recovery scope, not as configuration trivia:
+
+```
+STORAGE RECOVERY POSTURE: LOCAL ONLY
+
+  Call recordings     <bucket> (ap-southeast-2)   replication: none
+  Chat transcripts    <bucket> (ap-southeast-2)   replication: none
+  Scheduled reports   <bucket> (ap-southeast-2)   replication: none
+
+  Recoverable from  : loss or corruption of the Connect instance, with the
+                      bucket and region intact
+  NOT recoverable   : regional outage, account compromise, bucket deletion
+
+  To enable regional recovery: cross-region replication to the DR region,
+  with SSE-KMS object replication enabled and a destination-region key.
+```
+
+versus
+
+```
+STORAGE RECOVERY POSTURE: REGIONAL (us-west-2)
+
+  Call recordings     <bucket> (ap-southeast-2) -> <dr-bucket> (us-west-2)
+                      rule "connect-dr" enabled · prefix connect/ · SSE-KMS yes
+                      pending: 0 objects · latency p50 12s
+  ...
+  Regional recovery to us-west-2 is possible for this data.
+```
+
+And the failure that matters most is called out explicitly rather than averaged
+away:
+
+```
+  ⚠ Chat transcripts: replication rule enabled, but SSE-KMS object
+    replication is DISABLED and the bucket is KMS-encrypted.
+    Encrypted objects are NOT being replicated. Posture is LOCAL ONLY
+    despite replication appearing configured.
+```
+
+#### Where it surfaces
+
+- `connect_backup` — captures the file, prints the one-line posture
+- `connect_validate` — asserts posture has not regressed between runs, and
+  that the destination region matches the intended DR region
+- `connect_report` — a posture tile, since this is exactly the kind of fact an
+  executive should see without asking
+- `DR_TIER_WORKSHOP_PACK.md` — the posture is direct evidence for the Layer 2
+  tier decision
+
+#### Permissions
+
+Adds to the **backup** profile, all read-only:
+
+```
+s3:GetBucketLocation           s3:GetBucketVersioning
+s3:GetReplicationConfiguration s3:GetEncryptionConfiguration
+s3:ListBucket                  s3:GetBucketObjectLockConfiguration
+cloudwatch:GetMetricStatistics
+```
+
+Every check degrades to `UNKNOWN` on `AccessDenied` and must never fail the
+backup. A bucket owned by another account will often be `UNKNOWN`, and that is
+an honest answer — materially better than assuming replication exists.
+
+*Medium. Self-contained, read-only, and valuable before any other R1 work
+because it determines whether Option B in Section 4 is even available.*
+
 ### D6 — Tests
 
 - Fixtures covering: all 13 types; a bucket mismatch; an encryption downgrade;
@@ -283,31 +421,48 @@ out loud before someone reads the first post-fix run as a regression.
 
 ## 8. Suggested sequence
 
-1. **D1 + D2** together. Small, self-contained, fixes the false green and the
-   email gap. Deliverable on its own.
-2. **Decide Section 4.** Needs a person, not code.
-3. **D3** once that decision exists.
-4. **D4 + D5** last, since both depend on knowing what the target *should* be.
-5. **D6** alongside each step, not at the end.
+1. **D5a first.** It is read-only, self-contained, and it *answers* the Section 4
+   decision instead of waiting on it. Until the posture is known, Option B may
+   not even be available, and D3 would be built on an assumption.
+2. **D1 + D2** together. Small, fixes the false green and the email gap.
+   Independent of everything else.
+3. **Decide Section 4**, now informed by D5a's output rather than by guesswork.
+4. **D3** once that decision exists.
+5. **D4 + D5** last, since both depend on knowing what the target *should* be.
+6. **D6** alongside each step, not at the end.
 
-Steps 1 and 2 can run in parallel — one is engineering, one is a decision.
+Steps 1 and 2 can run in parallel — different files, no shared logic.
+
+This reorders the original sequence. D5a was added after the observation that
+replication state is a capturable fact rather than an open question, which makes
+it a cheap way to settle the expensive decision.
 
 ---
 
 ## 9. What I need from you
 
-**The Section 4 decision: where should DR storage point?**
+**Approval to build D5a**, which replaces the question I was going to ask you.
 
-My recommendation is **Option B** — replicated buckets in the DR region — on the
-grounds that Sydney has no Global Resiliency, so this toolkit is the recovery
-path for a regional event, and Option A cannot survive one.
+I had intended to ask whether cross-region replication exists on the recording
+and transcript buckets. That was the wrong question to put to a person: it is
+a fact the backup can read directly, and self-reported infrastructure state is
+exactly the kind of assumption that fails during a recovery.
 
-That decision has a prerequisite you may not have yet: cross-region replication
-on the three recording and transcript buckets, with a destination-region KMS
-key. If that replication does not exist, Option A is the only thing available
-today, and the honest position is that recordings would be unavailable in a
-regional DR — which is itself a finding worth taking to the workshop.
+So D5a goes first, and its output settles Section 4. If the posture comes back
+`LOCAL_ONLY`, then Option A is all that exists today, and the honest finding is
+that **recordings and transcripts would be unavailable in a regional DR** —
+which belongs in the workshop as evidence, not in a code change.
 
-A secondary question: should D4 treat an encryption downgrade as FAIL
-immediately, or WARN for one release? FAIL is correct; WARN is kinder to
-whatever currently passes.
+My expectation, worth stating so it can be proven wrong: given all three
+configs are KMS-encrypted, if replication does exist there is a reasonable
+chance it was configured without SSE-KMS object replication, in which case the
+destination bucket is empty and the posture is `LOCAL_ONLY` regardless of what
+the console shows.
+
+Two smaller decisions, neither blocking:
+
+1. Should D4 treat an encryption downgrade as `FAIL` immediately, or `WARN` for
+   one release? `FAIL` is correct; `WARN` is kinder to whatever currently passes.
+2. Should D5a's write probe (`--probe-writes`) exist at all, or is read-only
+   posture plus the `kms generate-data-key` check sufficient? The probe is the
+   only true proof of writability, but it is the one part that writes.
